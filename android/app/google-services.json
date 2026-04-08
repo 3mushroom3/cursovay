@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "939356990596",
+    "project_id": "dgtu-ff8cf",
+    "storage_bucket": "dgtu-ff8cf.appspot.com"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:939356990596:android:09f52cac8574d5ef3026d1",
+        "android_client_info": {
+          "package_name": "serg.kasabov_dgtu"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDRkEAPVBectcc6nBbj4EvECrEcH8zp_lA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

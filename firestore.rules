@@ -1,0 +1,52 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function userDoc() { return get(/databases/$(database)/documents/users/$(uid())).data; }
+    function role() { return signedIn() ? userDoc().role : null; }
+    function isAdmin() { return role() == 'admin'; }
+    function isModerator() { return role() == 'moderator' || isAdmin(); }
+    function isOwner(userId) { return signedIn() && userId == uid(); }
+
+    match /users/{userId} {
+      allow read: if signedIn() && (isOwner(userId) || isModerator());
+      allow create: if signedIn() && isOwner(userId);
+      allow update: if signedIn() && (isOwner(userId) || isModerator());
+      allow delete: if false;
+    }
+
+    match /categories/{categoryId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isModerator();
+    }
+
+    match /proposals/{proposalId} {
+      function isPublic() { return resource.data.visibility == 'public'; }
+      function isAuthor() { return isOwner(resource.data.authorId); }
+
+      allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
+      allow create: if signedIn();
+      allow update: if signedIn() && (isModerator() || isAuthor());
+      allow delete: if signedIn() && (isModerator() || isAuthor());
+
+      match /history/{eventId} {
+        allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
+        allow create: if signedIn() && isModerator();
+        allow update, delete: if false;
+      }
+
+      match /comments/{commentId} {
+        allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
+        allow create: if signedIn() && (isAuthor() || isModerator());
+        allow update, delete: if signedIn() && (isModerator() || request.auth.uid == resource.data.authorId);
+      }
+
+      match /likes/{likeUserId} {
+        allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
+        allow create, delete: if signedIn() && likeUserId == uid();
+      }
+    }
+  }
+}
+

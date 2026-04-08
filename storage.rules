@@ -1,0 +1,18 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if signedIn() && userId == uid();
+    }
+
+    match /proposals/{proposalId}/{fileName} {
+      // For диплома: attachments are readable by signed-in users only.
+      allow read: if signedIn();
+      allow write: if signedIn();
+    }
+  }
+}
+
