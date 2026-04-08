@@ -8,6 +8,7 @@ import 'create_proposal_page.dart';
 import 'statistics_page.dart';
 import 'users_admin_page.dart';
 import '../repositories/categories_repository.dart';
+import '../repositories/proposals_repository.dart';
 import 'categories_admin_page.dart';
 
 class FeedPage extends StatefulWidget {
@@ -71,6 +72,70 @@ class _FeedPageState extends State<FeedPage> {
     final title = (data['title'] as String? ?? '').toLowerCase();
     final text = (data['text'] as String? ?? '').toLowerCase();
     return title.contains(q) || text.contains(q);
+  }
+
+  Future<void> _confirmAndDeleteProposal(
+    BuildContext context,
+    String proposalId,
+  ) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить предложение?'),
+        content: const Text('Действие нельзя отменить.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Удалить'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return;
+    try {
+      await ProposalsRepository.deleteProposal(proposalId);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Предложение удалено')),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось удалить: $e')),
+      );
+    }
+  }
+
+  Widget _proposalListTile({
+    required BuildContext context,
+    required DocumentSnapshot doc,
+    required AuthService auth,
+  }) {
+    final data = doc.data() as Map<String, dynamic>;
+    final status = data['status'] as String? ?? '';
+    return ListTile(
+      title: Text(data['title'] as String? ?? ''),
+      subtitle: Text(_statusLabel(status)),
+      trailing: auth.isAdmin
+          ? IconButton(
+              tooltip: 'Удалить',
+              icon: const Icon(Icons.delete_outline),
+              onPressed: () => _confirmAndDeleteProposal(context, doc.id),
+            )
+          : null,
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => DetailPage(id: doc.id),
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -319,6 +384,17 @@ class _FeedPageState extends State<FeedPage> {
                 if (allSnap.connectionState == ConnectionState.waiting) {
                   return const Center(child: CircularProgressIndicator());
                 }
+                if (allSnap.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        'Не удалось загрузить ленту: ${allSnap.error}',
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  );
+                }
                 final allDocs = allSnap.data?.docs ?? const [];
                 final filtered = allDocs.where((d) {
                   final data = d.data() as Map<String, dynamic>;
@@ -328,22 +404,15 @@ class _FeedPageState extends State<FeedPage> {
                   return const Center(child: Text('Нет предложений'));
                 }
                 return ListView(
-                  children: filtered.map((doc) {
-                    final data = doc.data() as Map<String, dynamic>;
-                    final status = data['status'] ?? '';
-                    return ListTile(
-                      title: Text(data['title'] ?? ''),
-                      subtitle: Text(_statusLabel(status)),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DetailPage(id: doc.id),
-                          ),
-                        );
-                      },
-                    );
-                  }).toList(),
+                  children: filtered
+                      .map(
+                        (doc) => _proposalListTile(
+                          context: context,
+                          doc: doc,
+                          auth: auth,
+                        ),
+                      )
+                      .toList(),
                 );
               },
             )
@@ -359,6 +428,19 @@ class _FeedPageState extends State<FeedPage> {
                     if (waiting) {
                       return const Center(child: CircularProgressIndicator());
                     }
+                    if (mySnap.hasError || pubSnap.hasError) {
+                      final err =
+                          mySnap.hasError ? mySnap.error! : pubSnap.error!;
+                      return Center(
+                        child: Padding(
+                          padding: const EdgeInsets.all(24),
+                          child: Text(
+                            'Не удалось загрузить ленту: $err',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      );
+                    }
                     final myDocs = mySnap.data?.docs ?? const [];
                     final pubDocs = pubSnap.data?.docs ?? const [];
                     final merged = _mergeDocs(myDocs, pubDocs);
@@ -371,22 +453,15 @@ class _FeedPageState extends State<FeedPage> {
                       return const Center(child: Text('Нет предложений'));
                     }
                     return ListView(
-                      children: filtered.map((doc) {
-                        final data = doc.data() as Map<String, dynamic>;
-                        final status = data['status'] ?? '';
-                        return ListTile(
-                          title: Text(data['title'] ?? ''),
-                          subtitle: Text(_statusLabel(status)),
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => DetailPage(id: doc.id),
-                              ),
-                            );
-                          },
-                        );
-                      }).toList(),
+                      children: filtered
+                          .map(
+                            (doc) => _proposalListTile(
+                              context: context,
+                              doc: doc,
+                              auth: auth,
+                            ),
+                          )
+                          .toList(),
                     );
                   },
                 );

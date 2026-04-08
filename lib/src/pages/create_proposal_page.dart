@@ -33,6 +33,9 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
 
   final List<PlatformFile> _picked = [];
   bool _saving = false;
+  /// По умолчанию «всем» — иначе в ленте у других пользователей не появятся новые предложения
+  /// (лента для студентов = только свои + public).
+  bool _visibilityPublic = true;
 
   static const _uncategorized = 'uncategorized';
   static const int _maxAttachmentBytes = 350 * 1024; // <= 1MB/doc limit buffer
@@ -67,6 +70,8 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
       _title.text = d['title'] as String? ?? '';
       _text.text = d['text'] as String? ?? '';
       _categoryId = d['categoryId'] as String? ?? _uncategorized;
+      _visibilityPublic =
+          (d['visibility'] as String? ?? 'private') == 'public';
     } catch (e) {
       setState(() => _loadError = 'Ошибка загрузки');
     } finally {
@@ -148,7 +153,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
           text: _text.text.trim(),
           authorId: uid,
           categoryId: cat,
-          visibility: 'private',
+          visibility: _visibilityPublic ? 'public' : 'private',
           status: status,
         );
         proposalId = ref.id;
@@ -173,6 +178,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
           categoryId: cat,
         );
         await ProposalsRepository.proposals().doc(proposalId).update({
+          'visibility': _visibilityPublic ? 'public' : 'private',
           'status': status,
           'updatedAt': FieldValue.serverTimestamp(),
         });
@@ -279,6 +285,18 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
                     ? 'Прикрепить фото'
                     : 'Файлов выбрано: ${_picked.length}',
               ),
+            ),
+            const SizedBox(height: 16),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Видно всем в общей ленте'),
+              subtitle: const Text(
+                'Если выключить — увидите только вы (как приватное)',
+              ),
+              value: _visibilityPublic,
+              onChanged: _saving
+                  ? null
+                  : (v) => setState(() => _visibilityPublic = v),
             ),
             const SizedBox(height: 24),
             Row(
