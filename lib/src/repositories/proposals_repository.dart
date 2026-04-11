@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+import '../attachment_image.dart';
 import '../models/proposal_status.dart';
 
 /// Firestore access layer for proposals domain.
@@ -31,8 +32,9 @@ class ProposalsRepository {
       'authorId': authorId,
       'categoryId': categoryId ?? 'uncategorized',
       'visibility': visibility ?? 'private',
-      'status': status ?? ProposalStatus.draft,
+      'status': status ?? ProposalStatus.pending,
       'attachments': [],
+      'votesCount': 0,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
       // Kept for backward compatibility with the current UI.
@@ -67,8 +69,16 @@ class ProposalsRepository {
             ?.map((e) => Map<String, dynamic>.from(e as Map))
             .toList() ??
         <Map<String, dynamic>>[];
+    final merged = [...existing, ...items];
+    final totalB64 = estimateInlineBase64TotalLength(merged);
+    if (totalB64 > kMaxProposalAttachmentsInlineBase64Chars) {
+      throw FormatException(
+        'Суммарный размер вложений слишком большой для одного документа Firestore '
+        '(лимит ~500 КБ изображений в base64). Уменьшите или удалите часть фото.',
+      );
+    }
     await proposals().doc(proposalId).update({
-      'attachments': [...existing, ...items],
+      'attachments': merged,
       'updatedAt': FieldValue.serverTimestamp(),
     });
   }
@@ -129,15 +139,15 @@ class ProposalsRepository {
   }) async {
     await FirebaseFirestore.instance.runTransaction((tx) async {
       final pRef = proposals().doc(proposalId);
-      final lRef = pRef.collection('likes').doc(userId);
+      final lRef = pRef.collection('votes').doc(userId);
       final pSnap = await tx.get(pRef);
       final data = pSnap.data() ?? <String, dynamic>{};
-      final current = (data['likesCount'] as int?) ?? 0;
+      final current = (data['votesCount'] as int?) ?? 0;
       final exists = await tx.get(lRef);
       if (!exists.exists) {
-        tx.set(lRef, {'likedAt': FieldValue.serverTimestamp()});
+        tx.set(lRef, {'votedAt': FieldValue.serverTimestamp()});
         tx.update(pRef, {
-          'likesCount': current + 1,
+          'votesCount': current + 1,
           'updatedAt': FieldValue.serverTimestamp(),
         });
       }
@@ -150,34 +160,59 @@ class ProposalsRepository {
   }) async {
     await FirebaseFirestore.instance.runTransaction((tx) async {
       final pRef = proposals().doc(proposalId);
-      final lRef = pRef.collection('likes').doc(userId);
+      final lRef = pRef.collection('votes').doc(userId);
       final pSnap = await tx.get(pRef);
       final data = pSnap.data() ?? <String, dynamic>{};
-      final current = (data['likesCount'] as int?) ?? 0;
+      final current = (data['votesCount'] as int?) ?? 0;
       final lSnap = await tx.get(lRef);
       if (lSnap.exists) {
         tx.delete(lRef);
         tx.update(pRef, {
-          'likesCount': current > 0 ? current - 1 : 0,
+          'votesCount': current > 0 ? current - 1 : 0,
           'updatedAt': FieldValue.serverTimestamp(),
         });
       }
     });
   }
 
+  /// Подпись в ленте комментариев: ФИО из профиля или email.
+  static String composeAuthorDisplayName({
+    String? fullName,
+    String? email,
+  }) {
+    final n = (fullName ?? '').trim();
+    if (n.isNotEmpty) {
+      return n.length > 120 ? '${n.substring(0, 120)}…' : n;
+    }
+    final e = (email ?? '').trim();
+    if (e.isNotEmpty) return e;
+    return 'Участник';
+  }
+
   static Future<void> addComment({
     required String proposalId,
     required String userId,
     required String text,
+    String? authorFullName,
+    String? authorEmail,
   }) async {
     final content = text.trim();
     if (content.isEmpty) return;
+    if (content.length > 4000) {
+      throw FormatException('Комментарий слишком длинный (максимум 4000 символов).');
+    }
+
+    final authorDisplayName = composeAuthorDisplayName(
+      fullName: authorFullName,
+      email: authorEmail,
+    );
 
     await proposals()
         .doc(proposalId)
         .collection('comments')
         .add({
       'authorId': userId,
+      'authorDisplayName': authorDisplayName,
       'text': content,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),

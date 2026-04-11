@@ -1,29 +1,32 @@
 class ProposalStatus {
-  // Firestore values (string keys).
-  static const String draft = 'new'; // current app uses 'new' as initial state
-  static const String review = 'review';
-  static const String needsInfo = 'needs_info';
-  static const String inWork = 'at_work';
+  static const String pending = 'pending';
+  static const String inProgress = 'in_progress';
   static const String completed = 'completed';
   static const String rejected = 'rejected';
 
-  // Legacy normalization for already stored proposals (in app earlier used 'at work').
-  static const String inWorkLegacy = 'at work';
-
   static String normalize(String? status) {
-    if (status == null) return '';
-    return status == inWorkLegacy ? inWork : status;
+    if (status == null || status.isEmpty) return pending;
+    switch (status) {
+      case 'new':
+      case 'review':
+      case 'needs_info':
+        return pending;
+      case 'at_work':
+      case 'at work':
+        return inProgress;
+      case completed:
+      case rejected:
+        return status;
+      default:
+        return pending;
+    }
   }
 
   static String label(String status) {
     switch (normalize(status)) {
-      case draft:
-        return 'Новые (черновик)';
-      case review:
+      case pending:
         return 'На рассмотрении';
-      case needsInfo:
-        return 'Нужно уточнение';
-      case inWork:
+      case inProgress:
         return 'В работе';
       case completed:
         return 'Завершено';
@@ -35,12 +38,10 @@ class ProposalStatus {
   }
 
   static const List<String> values = [
-    draft,
-    review,
-    needsInfo,
-    inWork,
+    pending,
+    inProgress,
     completed,
-    rejected
+    rejected,
   ];
 }
 

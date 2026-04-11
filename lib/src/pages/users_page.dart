@@ -62,12 +62,10 @@ class UsersPage extends StatelessWidget {
             switch (normalized) {
               case UserRoles.student:
                 return 'Студент';
-              case UserRoles.staff:
-                return 'Сотрудник';
+              case UserRoles.teacher:
+                return 'Преподаватель';
               case UserRoles.admin:
                 return 'Администратор';
-              case UserRoles.moderator:
-                return 'Модератор';
               default:
                 return 'Неизвестно';
             }
@@ -76,6 +74,7 @@ class UsersPage extends StatelessWidget {
           final roleStatus = data['role'] ?? '';
           final roleText = roleLabel(roleStatus);
           final email = data['email'] ?? '';
+          final fullName = (data['fullName'] as String?)?.trim() ?? '';
           final createdAt = data['createdAt'] as Timestamp?;
           final rawStatus = data['status'] ?? '';
           final statusText = statusLabel(rawStatus);
@@ -85,9 +84,15 @@ class UsersPage extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                if (fullName.isNotEmpty)
+                  Text(
+                    fullName,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                if (fullName.isNotEmpty) const SizedBox(height: 8),
                 Text(
                   email,
-                  style: Theme.of(context).textTheme.titleMedium,
+                  style: Theme.of(context).textTheme.bodyLarge,
                 ),
                 const SizedBox(height: 12),
                 Text('Роль: $roleText'),

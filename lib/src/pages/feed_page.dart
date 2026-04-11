@@ -7,6 +7,7 @@ import 'detail_page.dart';
 import 'create_proposal_page.dart';
 import 'statistics_page.dart';
 import 'users_admin_page.dart';
+import '../attachment_image.dart';
 import '../repositories/categories_repository.dart';
 import '../repositories/proposals_repository.dart';
 import 'categories_admin_page.dart';
@@ -22,43 +23,17 @@ class _FeedPageState extends State<FeedPage> {
   String statusFilter = 'all';
   String categoryFilter = 'all';
   String queryText = '';
+  String sortBy = 'date';
 
   String _statusLabel(String status) {
     final normalized = ProposalStatus.normalize(status);
     return ProposalStatus.label(normalized);
   }
 
-  List<QueryDocumentSnapshot> _mergeDocs(
-    List<QueryDocumentSnapshot> a,
-    List<QueryDocumentSnapshot> b,
-  ) {
-    final map = <String, QueryDocumentSnapshot>{};
-    for (final d in a) {
-      map[d.id] = d;
-    }
-    for (final d in b) {
-      map[d.id] = d;
-    }
-    final list = map.values.toList();
-    list.sort((x, y) {
-      final xd = (x.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-      final yd = (y.data() as Map<String, dynamic>)['createdAt'] as Timestamp?;
-      final xt = xd?.millisecondsSinceEpoch ?? 0;
-      final yt = yd?.millisecondsSinceEpoch ?? 0;
-      return yt.compareTo(xt);
-    });
-    return list;
-  }
-
   bool _matchesFilters(Map<String, dynamic> data) {
     final st = ProposalStatus.normalize(data['status'] as String?);
     if (statusFilter != 'all') {
-      if (statusFilter == ProposalStatus.inWork) {
-        final raw = data['status'] as String?;
-        if (!(raw == ProposalStatus.inWork || raw == ProposalStatus.inWorkLegacy)) {
-          return false;
-        }
-      } else if (st != statusFilter) {
+      if (st != statusFilter) {
         return false;
       }
     }
@@ -120,6 +95,7 @@ class _FeedPageState extends State<FeedPage> {
     return ListTile(
       title: Text(data['title'] as String? ?? ''),
       subtitle: Text(_statusLabel(status)),
+      leading: ProposalListImageLeading(attachments: data['attachments']),
       trailing: auth.isAdmin
           ? IconButton(
               tooltip: 'Удалить',
@@ -180,20 +156,9 @@ class _FeedPageState extends State<FeedPage> {
       );
     }
 
-    final uid = auth.user!.uid;
-    final isStaff = auth.isAdmin || auth.isModerator;
+    final isTeacherOrAdmin = auth.isAdmin || auth.isTeacher;
     final allStream = FirebaseFirestore.instance
         .collection('proposals')
-        .orderBy('createdAt', descending: true)
-        .snapshots();
-    final myStream = FirebaseFirestore.instance
-        .collection('proposals')
-        .where('authorId', isEqualTo: uid)
-        .orderBy('createdAt', descending: true)
-        .snapshots();
-    final publicStream = FirebaseFirestore.instance
-        .collection('proposals')
-        .where('visibility', isEqualTo: 'public')
         .orderBy('createdAt', descending: true)
         .snapshots();
 
@@ -213,7 +178,7 @@ class _FeedPageState extends State<FeedPage> {
                 );
               },
             ),
-          if (auth.isModerator || auth.isAdmin)
+          if (auth.isTeacher || auth.isAdmin)
             IconButton(
               icon: const Icon(Icons.category_outlined),
               onPressed: () {
@@ -223,6 +188,13 @@ class _FeedPageState extends State<FeedPage> {
                 );
               },
             ),
+          IconButton(
+            tooltip: 'Сортировка',
+            icon: const Icon(Icons.sort),
+            onPressed: () => setState(() {
+              sortBy = sortBy == 'date' ? 'popularity' : 'date';
+            }),
+          ),
           IconButton(
             icon: const Icon(Icons.bar_chart),
             onPressed: () {
@@ -288,19 +260,11 @@ class _FeedPageState extends State<FeedPage> {
                                   child: Text('Все'),
                                 ),
                                 DropdownMenuItem(
-                                  value: ProposalStatus.draft,
-                                  child: Text('Новые'),
-                                ),
-                                DropdownMenuItem(
-                                  value: ProposalStatus.review,
+                                  value: ProposalStatus.pending,
                                   child: Text('На рассмотрении'),
                                 ),
                                 DropdownMenuItem(
-                                  value: ProposalStatus.needsInfo,
-                                  child: Text('Нужно уточнение'),
-                                ),
-                                DropdownMenuItem(
-                                  value: ProposalStatus.inWork,
+                                  value: ProposalStatus.inProgress,
                                   child: Text('В работе'),
                                 ),
                                 DropdownMenuItem(
@@ -377,8 +341,7 @@ class _FeedPageState extends State<FeedPage> {
           ),
         ],
       ),
-      body: isStaff
-          ? StreamBuilder<QuerySnapshot>(
+      body: StreamBuilder<QuerySnapshot>(
               stream: allStream,
               builder: (context, allSnap) {
                 if (allSnap.connectionState == ConnectionState.waiting) {
@@ -400,6 +363,19 @@ class _FeedPageState extends State<FeedPage> {
                   final data = d.data() as Map<String, dynamic>;
                   return _matchesFilters(data);
                 }).toList();
+                filtered.sort((a, b) {
+                  final ad = a.data() as Map<String, dynamic>;
+                  final bd = b.data() as Map<String, dynamic>;
+                  if (sortBy == 'popularity') {
+                    final av = (ad['votesCount'] as int?) ?? 0;
+                    final bv = (bd['votesCount'] as int?) ?? 0;
+                    return bv.compareTo(av);
+                  }
+                  final ac = ad['createdAt'] as Timestamp?;
+                  final bc = bd['createdAt'] as Timestamp?;
+                  return (bc?.millisecondsSinceEpoch ?? 0)
+                      .compareTo(ac?.millisecondsSinceEpoch ?? 0);
+                });
                 if (filtered.isEmpty) {
                   return const Center(child: Text('Нет предложений'));
                 }
@@ -415,59 +391,10 @@ class _FeedPageState extends State<FeedPage> {
                       .toList(),
                 );
               },
-            )
-          : StreamBuilder<QuerySnapshot>(
-              stream: myStream,
-              builder: (context, mySnap) {
-                return StreamBuilder<QuerySnapshot>(
-                  stream: publicStream,
-                  builder: (context, pubSnap) {
-                    final waiting =
-                        mySnap.connectionState == ConnectionState.waiting ||
-                            pubSnap.connectionState == ConnectionState.waiting;
-                    if (waiting) {
-                      return const Center(child: CircularProgressIndicator());
-                    }
-                    if (mySnap.hasError || pubSnap.hasError) {
-                      final err =
-                          mySnap.hasError ? mySnap.error! : pubSnap.error!;
-                      return Center(
-                        child: Padding(
-                          padding: const EdgeInsets.all(24),
-                          child: Text(
-                            'Не удалось загрузить ленту: $err',
-                            textAlign: TextAlign.center,
-                          ),
-                        ),
-                      );
-                    }
-                    final myDocs = mySnap.data?.docs ?? const [];
-                    final pubDocs = pubSnap.data?.docs ?? const [];
-                    final merged = _mergeDocs(myDocs, pubDocs);
-                    final filtered = merged.where((d) {
-                      final data = d.data() as Map<String, dynamic>;
-                      return _matchesFilters(data);
-                    }).toList();
-
-                    if (filtered.isEmpty) {
-                      return const Center(child: Text('Нет предложений'));
-                    }
-                    return ListView(
-                      children: filtered
-                          .map(
-                            (doc) => _proposalListTile(
-                              context: context,
-                              doc: doc,
-                              auth: auth,
-                            ),
-                          )
-                          .toList(),
-                    );
-                  },
-                );
-              },
             ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: isTeacherOrAdmin
+          ? null
+          : FloatingActionButton(
         onPressed: () {
           Navigator.push(
             context,

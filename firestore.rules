@@ -22,6 +22,17 @@ service cloud.firestore {
     }
 
     match /proposals/{proposalId} {
+      function proposalData() {
+        return get(/databases/$(database)/documents/proposals/$(proposalId)).data;
+      }
+      function canSeeProposalContent() {
+        return signedIn() && (
+          proposalData().visibility == 'public' ||
+          proposalData().authorId == uid() ||
+          isModerator()
+        );
+      }
+
       function isPublic() { return resource.data.visibility == 'public'; }
       function isAuthor() { return isOwner(resource.data.authorId); }
 
@@ -31,22 +42,28 @@ service cloud.firestore {
       allow delete: if signedIn() && (isModerator() || isAuthor());
 
       match /history/{eventId} {
-        allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
+        allow read: if canSeeProposalContent();
         allow create: if signedIn() && isModerator();
         allow update, delete: if false;
       }
 
       match /comments/{commentId} {
-        allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
-        allow create: if signedIn() && (isAuthor() || isModerator());
-        allow update, delete: if signedIn() && (isModerator() || request.auth.uid == resource.data.authorId);
+        allow read: if canSeeProposalContent();
+        allow create: if canSeeProposalContent() &&
+          request.resource.data.authorId == uid() &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() < 8000 &&
+          request.resource.data.authorDisplayName is string &&
+          request.resource.data.authorDisplayName.size() > 0 &&
+          request.resource.data.authorDisplayName.size() <= 200;
+        allow update, delete: if signedIn() && (isModerator() || resource.data.authorId == uid());
       }
 
-      match /likes/{likeUserId} {
-        allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
-        allow create, delete: if signedIn() && likeUserId == uid();
+      match /votes/{voteUserId} {
+        allow read: if canSeeProposalContent();
+        allow create, delete: if signedIn() && voteUserId == uid();
       }
     }
   }
 }
-

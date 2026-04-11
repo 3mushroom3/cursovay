@@ -1,16 +1,17 @@
 class UserRoles {
-  // Target roles for the diploma (student/staff + responsible/admin).
   static const String student = 'student';
-  static const String staff = 'staff';
-  static const String moderator = 'moderator';
+  static const String teacher = 'teacher';
   static const String admin = 'admin';
 
-  // Legacy role value used in the existing prototype.
+  // Legacy values from prototype versions.
   static const String legacyUser = 'user';
+  static const String legacyStaff = 'staff';
+  static const String legacyModerator = 'moderator';
 
   static String normalize(String? role) {
     if (role == null) return '';
     if (role == legacyUser) return student;
+    if (role == legacyStaff || role == legacyModerator) return teacher;
     return role;
   }
 }

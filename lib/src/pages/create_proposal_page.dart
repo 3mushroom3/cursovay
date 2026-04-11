@@ -1,19 +1,19 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:uuid/uuid.dart';
 
 import '../auth_service.dart';
 import '../models/proposal_status.dart';
 import '../repositories/categories_repository.dart';
 import '../repositories/proposals_repository.dart';
 
-/// Create or edit a proposal (edit only allowed for [ProposalStatus.draft]
-/// and [ProposalStatus.review] — enforced in UI when opening from details).
+/// Create or edit a proposal (edit only allowed for [ProposalStatus.pending]
+/// — enforced in UI when opening from details).
 class CreateProposalPage extends StatefulWidget {
   const CreateProposalPage({super.key, this.proposalId});
 
@@ -38,7 +38,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
   bool _visibilityPublic = true;
 
   static const _uncategorized = 'uncategorized';
-  static const int _maxAttachmentBytes = 350 * 1024; // <= 1MB/doc limit buffer
+  static const int _maxAttachmentBytes = 500 * 1024;
 
   @override
   void initState() {
@@ -91,26 +91,38 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
       allowMultiple: true,
       type: FileType.custom,
       allowedExtensions: const ['jpg', 'jpeg', 'png'],
+      withData: true,
     );
     if (r == null || r.files.isEmpty) return;
     setState(() {
       for (final f in r.files) {
-        if (f.path != null) _picked.add(f);
+        if ((f.bytes != null && f.bytes!.isNotEmpty) ||
+            (f.path != null && f.path!.isNotEmpty)) {
+          _picked.add(f);
+        }
       }
     });
   }
 
-  Future<List<Map<String, dynamic>>> _uploadAttachments(String proposalId) async {
+  Future<Uint8List> _readFileBytes(PlatformFile f) async {
+    if (f.bytes != null && f.bytes!.isNotEmpty) {
+      return f.bytes!;
+    }
+    final p = f.path;
+    if (p == null || p.isEmpty) {
+      throw StateError('Нет данных файла');
+    }
+    return File(p).readAsBytes();
+  }
+
+  Future<List<Map<String, dynamic>>> _encodeAttachments() async {
     final out = <Map<String, dynamic>>[];
-    final uuid = const Uuid();
     for (final f in _picked) {
-      final path = f.path;
-      if (path == null) continue;
       final ext = (f.extension ?? '').toLowerCase();
       if (!const {'jpg', 'jpeg', 'png'}.contains(ext)) {
         throw FormatException('Можно прикреплять только фото (JPG/PNG).');
       }
-      final bytes = await File(path).readAsBytes();
+      final bytes = await _readFileBytes(f);
       if (bytes.length > _maxAttachmentBytes) {
         throw FormatException(
           'Фото «${f.name}» слишком большое (${(bytes.length / 1024).ceil()} КБ). '
@@ -118,12 +130,13 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
         );
       }
       final mime = ext == 'png' ? 'image/png' : 'image/jpeg';
-      final objectName = '${uuid.v4()}.$ext';
-      final b64 = base64Encode(bytes);
+      final objectName = '${DateTime.now().millisecondsSinceEpoch}_${f.name}';
+      final inline = base64Encode(bytes);
       out.add({
         'name': f.name.isNotEmpty ? f.name : objectName,
         'contentType': mime,
-        'base64': b64,
+        'inlineBase64': inline,
+        'storage': 'firestore',
       });
     }
     return out;
@@ -161,7 +174,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
         proposalId = widget.proposalId!;
         final snap = await ProposalsRepository.proposals().doc(proposalId).get();
         final st = snap.data()?['status'] as String?;
-        if (st != ProposalStatus.draft && st != ProposalStatus.review) {
+        if (st != ProposalStatus.pending) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -185,10 +198,10 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
       }
 
       if (_picked.isNotEmpty) {
-        final uploaded = await _uploadAttachments(proposalId);
+        final encoded = await _encodeAttachments();
         await ProposalsRepository.appendAttachments(
           proposalId: proposalId,
-          items: uploaded,
+          items: encoded,
         );
         _picked.clear();
       }
@@ -282,8 +295,15 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
               icon: const Icon(Icons.attach_file),
               label: Text(
                 _picked.isEmpty
-                    ? 'Прикрепить фото'
+                    ? 'Прикрепить фото (JPG/PNG, до ${_maxAttachmentBytes ~/ 1024} КБ каждое)'
                     : 'Файлов выбрано: ${_picked.length}',
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 8),
+              child: Text(
+                'Вложения хранятся в Firestore; суммарно не больше ~500 КБ изображений на предложение.',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
               ),
             ),
             const SizedBox(height: 16),
@@ -305,17 +325,8 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
                   child: OutlinedButton(
                     onPressed: _saving
                         ? null
-                        : () => _save(status: ProposalStatus.draft),
-                    child: const Text('Черновик'),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: _saving
-                        ? null
-                        : () => _save(status: ProposalStatus.review),
-                    child: const Text('На модерацию'),
+                        : () => _save(status: ProposalStatus.pending),
+                    child: const Text('Сохранить'),
                   ),
                 ),
               ],

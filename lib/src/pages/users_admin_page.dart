@@ -35,12 +35,10 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
     switch (normalized) {
       case UserRoles.student:
         return 'Студент';
-      case UserRoles.staff:
-        return 'Сотрудник';
+      case UserRoles.teacher:
+        return 'Преподаватель';
       case UserRoles.admin:
         return 'Администратор';
-      case UserRoles.moderator:
-        return 'Модератор';
       default:
         return 'Неизвестно';
     }
@@ -52,11 +50,11 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
     return null;
   }
 
-  static Uint8List? _identityPhotoBytes(Map<String, dynamic> data) {
-    final s = data['identityPhotoBase64'];
-    if (s is! String || s.isEmpty) return null;
+  static Uint8List? _documentInlineImageBytes(Map<String, dynamic> data) {
+    final inline = data['documentInlineBase64'];
+    if (inline is! String || inline.isEmpty) return null;
     try {
-      return base64Decode(s);
+      return base64Decode(inline);
     } catch (_) {
       return null;
     }
@@ -172,10 +170,8 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final docUrl = _documentUrl(data);
+            final inlineBytes = _documentInlineImageBytes(data);
             final isPdf = _isLikelyPdf(data, docUrl);
-            final identityBytes = _identityPhotoBytes(data);
-            final hasIdentityB64 = data['identityPhotoBase64'] is String &&
-                (data['identityPhotoBase64'] as String).isNotEmpty;
 
             return AlertDialog(
               title: Text(data['email'] ?? ''),
@@ -189,31 +185,28 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
                         padding: const EdgeInsets.only(bottom: 8),
                         child: Text('ФИО: ${data['fullName']}'),
                       ),
-                    if (identityBytes != null) ...[
+                    if (inlineBytes != null) ...[
                       const Text(
-                        'Фото для подтверждения личности:',
+                        'Документ (из Firestore):',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 8),
                       ClipRRect(
                         borderRadius: BorderRadius.circular(8),
                         child: Image.memory(
-                          identityBytes,
+                          inlineBytes,
                           height: 200,
                           fit: BoxFit.contain,
+                          errorBuilder: (ctx, err, st) => Text(
+                            'Не удалось показать изображение: $err',
+                            style: const TextStyle(fontSize: 12),
+                          ),
                         ),
                       ),
                       const SizedBox(height: 16),
-                    ] else if (hasIdentityB64) ...[
+                    ] else if (docUrl != null) ...[
                       const Text(
-                        'Фото для подтверждения не удалось отобразить.',
-                        style: TextStyle(color: Colors.orange),
-                      ),
-                      const SizedBox(height: 16),
-                    ],
-                    if (docUrl != null) ...[
-                      const Text(
-                        'Документ при регистрации:',
+                        'Изображение зачетки/кабинета:',
                         style: TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const SizedBox(height: 8),
@@ -238,7 +231,7 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
                                 ),
                               );
                             },
-                            errorBuilder: (_, __, ___) => SelectableText(
+                            errorBuilder: (ctx, err, st) => SelectableText(
                               docUrl,
                               style: const TextStyle(fontSize: 12),
                             ),
@@ -255,12 +248,8 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
                           child: Text('Студент'),
                         ),
                         DropdownMenuItem(
-                          value: UserRoles.staff,
-                          child: Text('Сотрудник'),
-                        ),
-                        DropdownMenuItem(
-                          value: UserRoles.moderator,
-                          child: Text('Модератор'),
+                          value: UserRoles.teacher,
+                          child: Text('Преподаватель'),
                         ),
                         DropdownMenuItem(
                           value: UserRoles.admin,

@@ -15,11 +15,9 @@ class StatisticsPage extends StatelessWidget {
   Color statusColor(String status) {
     final normalized = ProposalStatus.normalize(status);
     switch (normalized) {
-      case ProposalStatus.draft:
-        return Colors.blue;
-      case ProposalStatus.review:
+      case ProposalStatus.pending:
         return Colors.orange;
-      case ProposalStatus.inWork:
+      case ProposalStatus.inProgress:
         return Colors.purple;
       case ProposalStatus.completed:
         return Colors.green;
@@ -42,10 +40,8 @@ class StatisticsPage extends StatelessWidget {
           }
 
           final counts = <String, int>{
-            ProposalStatus.draft: 0,
-            ProposalStatus.review: 0,
-            ProposalStatus.needsInfo: 0,
-            ProposalStatus.inWork: 0,
+            ProposalStatus.pending: 0,
+            ProposalStatus.inProgress: 0,
             ProposalStatus.completed: 0,
             ProposalStatus.rejected: 0,
           };
@@ -53,18 +49,18 @@ class StatisticsPage extends StatelessWidget {
           final top = <Map<String, dynamic>>[];
 
           for (final doc in snapshot.data!.docs) {
-            final status = (doc.data() as Map)['status'] ?? ProposalStatus.draft;
+            final status = (doc.data() as Map)['status'] ?? ProposalStatus.pending;
             final normalized = ProposalStatus.normalize(status as String?);
             if (counts.containsKey(normalized)) {
               counts[normalized] = counts[normalized]! + 1;
             }
 
             final data = doc.data() as Map;
-            final likesCount = (data['likesCount'] as int?) ?? 0;
+            final votesCount = (data['votesCount'] as int?) ?? 0;
             top.add({
               'id': doc.id,
               'title': data['title'] ?? '',
-              'likesCount': likesCount,
+              'votesCount': votesCount,
             });
           }
 
@@ -73,7 +69,7 @@ class StatisticsPage extends StatelessWidget {
             return const Center(child: Text('Нет данных'));
           }
 
-          top.sort((a, b) => (b['likesCount'] as int).compareTo(a['likesCount'] as int));
+          top.sort((a, b) => (b['votesCount'] as int).compareTo(a['votesCount'] as int));
           final top5 = top.take(5).toList();
 
           return ListView(
@@ -117,7 +113,7 @@ class StatisticsPage extends StatelessWidget {
                 );
               }).toList(),
               const SizedBox(height: 32),
-              Text('Топ по лайкам', style: Theme.of(context).textTheme.titleMedium),
+              Text('Топ по голосам', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               if (top5.isEmpty)
                 const Text('Нет данных')
@@ -126,7 +122,7 @@ class StatisticsPage extends StatelessWidget {
                       dense: true,
                       contentPadding: EdgeInsets.zero,
                       title: Text((e['title'] as String).toString()),
-                      trailing: Text('${e['likesCount']}'),
+                      trailing: Text('${e['votesCount']}'),
                     )),
             ],
           );

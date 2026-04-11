@@ -1,9 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../auth_service.dart';
+import '../attachment_image.dart';
 import '../models/proposal_status.dart';
 import '../models/user_roles.dart';
 import '../repositories/proposals_repository.dart';
@@ -29,7 +28,7 @@ class _DetailPageState extends State<DetailPage> {
     final auth = context.watch<AuthService>();
     final normalizedRole = UserRoles.normalize(auth.profile?['role']);
     final canEdit =
-        normalizedRole == UserRoles.moderator || normalizedRole == UserRoles.admin;
+        normalizedRole == UserRoles.teacher || normalizedRole == UserRoles.admin;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Детали предложения')),
@@ -71,9 +70,12 @@ class _DetailPageState extends State<DetailPage> {
           final authorId = data['authorId'] as String?;
           final isAuthor = authorId != null && authorId == auth.user?.uid;
           final canAuthorEdit = isAuthor &&
-              (normalizedStatus == ProposalStatus.draft ||
-                  normalizedStatus == ProposalStatus.review);
-          final canComment = isAuthor || canEdit;
+              (normalizedStatus == ProposalStatus.pending);
+          final profileStatus = auth.profile?['status'] as String? ?? '';
+          final canComment = auth.user != null &&
+              profileStatus != 'unverified' &&
+              profileStatus != 'disabled';
+          final canSeeHistory = isAuthor || auth.isAdmin;
 
           return Padding(
             padding: const EdgeInsets.all(24),
@@ -86,7 +88,10 @@ class _DetailPageState extends State<DetailPage> {
                 const SizedBox(height: 12),
                 Text(data['text'] ?? ''),
                 const SizedBox(height: 24),
-                Text('Статус: ${ProposalStatus.label(normalizedStatus)}'),
+                Tooltip(
+                  message: 'pending: на рассмотрении; in_progress: в работе; completed: завершено; rejected: отклонено',
+                  child: Text('Статус: ${ProposalStatus.label(normalizedStatus)}'),
+                ),
                 if (createdAt != null)
                   Text('Создано: ${createdAt.toDate()}'),
                 if (updatedAt != null)
@@ -166,15 +171,11 @@ class _DetailPageState extends State<DetailPage> {
                     decoration:
                         const InputDecoration(labelText: 'Изменить статус'),
                     items: const [
-                      DropdownMenuItem(value: ProposalStatus.draft, child: Text('Новый')),
                       DropdownMenuItem(
-                          value: ProposalStatus.review,
+                          value: ProposalStatus.pending,
                           child: Text('На рассмотрении')),
                       DropdownMenuItem(
-                          value: ProposalStatus.needsInfo,
-                          child: Text('Нужно уточнение')),
-                      DropdownMenuItem(
-                          value: ProposalStatus.inWork, child: Text('В работе')),
+                          value: ProposalStatus.inProgress, child: Text('В работе')),
                       DropdownMenuItem(
                           value: ProposalStatus.completed, child: Text('Завершено')),
                       DropdownMenuItem(
@@ -192,7 +193,7 @@ class _DetailPageState extends State<DetailPage> {
                   const SizedBox(height: 24),
                   FilledButton(
                     onPressed: () async {
-                      final nextStatus = _status ?? ProposalStatus.review;
+                      final nextStatus = _status ?? ProposalStatus.pending;
                       final reason = _commentController.text.trim();
                       if (nextStatus == ProposalStatus.rejected && reason.isEmpty) {
                         ScaffoldMessenger.of(context).showSnackBar(
@@ -234,6 +235,7 @@ class _DetailPageState extends State<DetailPage> {
                     child: const Text('Сохранить'),
                   ),
                 ],
+                if (canSeeHistory) ...[
                 const SizedBox(height: 24),
                 Text(
                   'История статусов',
@@ -258,19 +260,21 @@ class _DetailPageState extends State<DetailPage> {
                         final st = ProposalStatus.label(m['status'] as String? ?? '');
                         final r = (m['reason'] as String?)?.trim();
                         final at = (m['changedAt'] as Timestamp?)?.toDate();
+                        final by = (m['changedById'] as String?) ?? '';
                         return ListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
                           title: Text(st),
                           subtitle: Text([
-                            if (at != null) at.toString(),
+                            if (at != null) _relativeTime(at),
+                            if (by.isNotEmpty) 'изменил: $by',
                             if (r != null && r.isNotEmpty) r,
                           ].join(' — ')),
                         );
                       }).toList(),
                     );
                   },
-                ),
+                ),],
                 const SizedBox(height: 24),
                 Text(
                   'Комментарии',
@@ -293,11 +297,41 @@ class _DetailPageState extends State<DetailPage> {
                         final m = d.data();
                         final text = m['text'] as String? ?? '';
                         final at = (m['createdAt'] as Timestamp?)?.toDate();
+                        final who = (m['authorDisplayName'] as String?)?.trim();
+                        final aid = m['authorId'] as String? ?? '';
+                        final whoLine = (who != null && who.isNotEmpty)
+                            ? who
+                            : (aid.length >= 8
+                                ? 'Пользователь ${aid.substring(0, 8)}…'
+                                : 'Пользователь');
                         return ListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
-                          title: Text(text),
-                          subtitle: at == null ? null : Text(at.toString()),
+                          title: Text(
+                            whoLine,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                            ),
+                          ),
+                          subtitle: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              Text(text),
+                              if (at != null)
+                                Padding(
+                                  padding: const EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    _relativeTime(at),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey.shade700,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         );
                       }).toList(),
                     );
@@ -319,12 +353,35 @@ class _DetailPageState extends State<DetailPage> {
                     child: FilledButton(
                       onPressed: () async {
                         final txt = _newCommentController.text.trim();
-                        _newCommentController.clear();
-                        await ProposalsRepository.addComment(
-                          proposalId: widget.id,
-                          userId: auth.user!.uid,
-                          text: txt,
-                        );
+                        if (txt.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Введите текст комментария'),
+                            ),
+                          );
+                          return;
+                        }
+                        final profile = auth.profile;
+                        final fullName =
+                            (profile?['fullName'] as String?)?.trim();
+                        try {
+                          await ProposalsRepository.addComment(
+                            proposalId: widget.id,
+                            userId: auth.user!.uid,
+                            text: txt,
+                            authorFullName:
+                                fullName != null && fullName.isNotEmpty
+                                    ? fullName
+                                    : null,
+                            authorEmail: auth.user?.email,
+                          );
+                          _newCommentController.clear();
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Не удалось отправить: $e')),
+                          );
+                        }
                       },
                       child: const Text('Отправить'),
                     ),
@@ -344,15 +401,6 @@ class _AttachmentsBlock extends StatelessWidget {
 
   final Object? attachments;
 
-  Uint8List? _bytesFromBase64(Object? s) {
-    if (s is! String || s.isEmpty) return null;
-    try {
-      return base64Decode(s);
-    } catch (_) {
-      return null;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final list = (attachments as List?)
@@ -368,10 +416,9 @@ class _AttachmentsBlock extends StatelessWidget {
         ...list.map((a) {
           final name = a['name'] as String? ?? 'file';
           final ct = (a['contentType'] as String?) ?? '';
-          final b64 = a['base64'];
-          final bytes = _bytesFromBase64(b64);
-
-          if (bytes != null && ct.startsWith('image/')) {
+          final url = a['url'] as String? ?? '';
+          final img = imageWidgetForProposalAttachment(a);
+          if (img != null) {
             return Padding(
               padding: const EdgeInsets.only(bottom: 12),
               child: Column(
@@ -379,20 +426,11 @@ class _AttachmentsBlock extends StatelessWidget {
                 children: [
                   Text(name, style: Theme.of(context).textTheme.bodyMedium),
                   const SizedBox(height: 6),
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(
-                      bytes,
-                      height: 220,
-                      fit: BoxFit.contain,
-                    ),
-                  ),
+                  img,
                 ],
               ),
             );
           }
-
-          final url = a['url'] as String? ?? '';
           return ListTile(
             dense: true,
             contentPadding: EdgeInsets.zero,
@@ -402,8 +440,6 @@ class _AttachmentsBlock extends StatelessWidget {
               [
                 if (ct.isNotEmpty) ct,
                 if (url.isNotEmpty) url,
-                if (bytes == null && b64 is String && b64.isNotEmpty)
-                  'не удалось отобразить',
               ].join(' • '),
             ),
           );
@@ -424,7 +460,7 @@ class _LikesRow extends StatelessWidget {
     final likesCol = FirebaseFirestore.instance
         .collection('proposals')
         .doc(proposalId)
-        .collection('likes');
+        .collection('votes');
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
       stream: likesCol.snapshots(),
       builder: (context, snapshot) {
@@ -447,12 +483,20 @@ class _LikesRow extends StatelessWidget {
                   );
                 }
               },
-              icon: Icon(liked ? Icons.favorite : Icons.favorite_border),
+              icon: Icon(liked ? Icons.how_to_vote : Icons.how_to_vote_outlined),
             ),
-            Text('$count'),
+            Text('Голосов: $count'),
           ],
         );
       },
     );
   }
+}
+
+String _relativeTime(DateTime dateTime) {
+  final diff = DateTime.now().difference(dateTime);
+  if (diff.inMinutes < 1) return 'только что';
+  if (diff.inHours < 1) return '${diff.inMinutes} мин назад';
+  if (diff.inDays < 1) return '${diff.inHours} ч назад';
+  return '${diff.inDays} дн назад';
 }
