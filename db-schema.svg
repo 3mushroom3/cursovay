@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1900" height="980" viewBox="0 0 1900 980">
+  <defs>
+    <style>
+      .title { font: 700 22px Arial, sans-serif; fill: #1f2d3d; }
+      .entity-title { font: 700 16px Arial, sans-serif; fill: #ffffff; }
+      .field { font: 13px Arial, sans-serif; fill: #2c3e50; }
+      .note { font: 13px Arial, sans-serif; fill: #37474f; }
+      .header { fill: #2f4f77; }
+      .body { fill: #f7f9fc; stroke: #90a4ae; stroke-width: 1.2; }
+      .line { stroke: #455a64; stroke-width: 1.8; fill: none; }
+      .label { font: 12px Arial, sans-serif; fill: #263238; }
+      .card { font: 12px Arial, sans-serif; fill: #455a64; }
+    </style>
+  </defs>
+
+  <text x="30" y="36" class="title">Logical DB model (Firestore): entities and relationships</text>
+
+  <!-- USERS -->
+  <rect x="30" y="80" rx="8" ry="8" width="360" height="280" class="body"/>
+  <rect x="30" y="80" rx="8" ry="8" width="360" height="38" class="header"/>
+  <text x="48" y="105" class="entity-title">USERS</text>
+  <text x="48" y="135" class="field">PK uid: string</text>
+  <text x="48" y="155" class="field">email, firstName, lastName, middleName</text>
+  <text x="48" y="175" class="field">fullName: string</text>
+  <text x="48" y="195" class="field">role: student | teacher | admin</text>
+  <text x="48" y="215" class="field">status: unverified | verified | disabled</text>
+  <text x="48" y="235" class="field">isVerified: bool</text>
+  <text x="48" y="255" class="field">documentMime, documentInlineBase64</text>
+  <text x="48" y="275" class="field">documentStorage, fcmTokens: map</text>
+  <text x="48" y="295" class="field">createdAt, updatedAt: timestamp</text>
+
+  <!-- CATEGORIES -->
+  <rect x="30" y="430" rx="8" ry="8" width="360" height="170" class="body"/>
+  <rect x="30" y="430" rx="8" ry="8" width="360" height="38" class="header"/>
+  <text x="48" y="455" class="entity-title">CATEGORIES</text>
+  <text x="48" y="485" class="field">PK id: string</text>
+  <text x="48" y="505" class="field">name: string</text>
+  <text x="48" y="525" class="field">createdAt, updatedAt: timestamp</text>
+  <text x="48" y="555" class="field">* categoryId may be "uncategorized"</text>
+
+  <!-- PROPOSALS -->
+  <rect x="500" y="80" rx="8" ry="8" width="460" height="360" class="body"/>
+  <rect x="500" y="80" rx="8" ry="8" width="460" height="38" class="header"/>
+  <text x="518" y="105" class="entity-title">PROPOSALS</text>
+  <text x="518" y="135" class="field">PK id: string</text>
+  <text x="518" y="155" class="field">title, text: string</text>
+  <text x="518" y="175" class="field">FK authorId -&gt; USERS.uid</text>
+  <text x="518" y="195" class="field">FK categoryId -&gt; CATEGORIES.id</text>
+  <text x="518" y="215" class="field">visibility: public | private</text>
+  <text x="518" y="235" class="field">status: pending | in_progress | completed | rejected</text>
+  <text x="518" y="255" class="field">comment: string</text>
+  <text x="518" y="275" class="field">votesCount: int (denormalized counter)</text>
+  <text x="518" y="295" class="field">attachments[]: list&lt;Attachment&gt;</text>
+  <text x="518" y="315" class="field">createdAt, updatedAt: timestamp</text>
+
+  <!-- COMMENTS -->
+  <rect x="1030" y="80" rx="8" ry="8" width="380" height="210" class="body"/>
+  <rect x="1030" y="80" rx="8" ry="8" width="380" height="38" class="header"/>
+  <text x="1048" y="105" class="entity-title">PROPOSAL_COMMENTS (subcollection)</text>
+  <text x="1048" y="135" class="field">PK id: string</text>
+  <text x="1048" y="155" class="field">FK proposalId -&gt; PROPOSALS.id</text>
+  <text x="1048" y="175" class="field">FK authorId -&gt; USERS.uid</text>
+  <text x="1048" y="195" class="field">authorDisplayName, text: string</text>
+  <text x="1048" y="215" class="field">createdAt, updatedAt: timestamp</text>
+
+  <!-- HISTORY -->
+  <rect x="1030" y="340" rx="8" ry="8" width="380" height="220" class="body"/>
+  <rect x="1030" y="340" rx="8" ry="8" width="380" height="38" class="header"/>
+  <text x="1048" y="365" class="entity-title">PROPOSAL_HISTORY (subcollection)</text>
+  <text x="1048" y="395" class="field">PK id: string</text>
+  <text x="1048" y="415" class="field">FK proposalId -&gt; PROPOSALS.id</text>
+  <text x="1048" y="435" class="field">FK changedById -&gt; USERS.uid</text>
+  <text x="1048" y="455" class="field">status, reason: string</text>
+  <text x="1048" y="475" class="field">changedAt: timestamp</text>
+
+  <!-- VOTES -->
+  <rect x="1030" y="610" rx="8" ry="8" width="380" height="190" class="body"/>
+  <rect x="1030" y="610" rx="8" ry="8" width="380" height="38" class="header"/>
+  <text x="1048" y="635" class="entity-title">PROPOSAL_VOTES (subcollection)</text>
+  <text x="1048" y="665" class="field">PK userId (doc id)</text>
+  <text x="1048" y="685" class="field">FK proposalId -&gt; PROPOSALS.id</text>
+  <text x="1048" y="705" class="field">FK userId -&gt; USERS.uid</text>
+  <text x="1048" y="725" class="field">votedAt: timestamp</text>
+  <text x="1048" y="755" class="field">* one user = one vote per proposal</text>
+
+  <!-- ATTACHMENT -->
+  <rect x="500" y="510" rx="8" ry="8" width="460" height="210" class="body"/>
+  <rect x="500" y="510" rx="8" ry="8" width="460" height="38" class="header"/>
+  <text x="518" y="535" class="entity-title">ATTACHMENT (embedded in PROPOSALS.attachments[])</text>
+  <text x="518" y="565" class="field">name: string</text>
+  <text x="518" y="585" class="field">contentType: string</text>
+  <text x="518" y="605" class="field">inlineBase64: string</text>
+  <text x="518" y="625" class="field">storage: firestore</text>
+  <text x="518" y="645" class="field">url: string (optional)</text>
+
+  <!-- NOTE -->
+  <rect x="1470" y="80" rx="8" ry="8" width="390" height="180" fill="#fffde7" stroke="#c8b900" stroke-width="1.2"/>
+  <text x="1490" y="110" class="note">Firestore notes:</text>
+  <text x="1490" y="135" class="note">- relationships are logical by IDs,</text>
+  <text x="1490" y="155" class="note">  no strict FK constraints;</text>
+  <text x="1490" y="180" class="note">- comments/history/votes are stored as</text>
+  <text x="1490" y="200" class="note">  subcollections in proposals/{proposalId}.</text>
+  <text x="1490" y="225" class="note">Cardinality shown as 1:N.</text>
+
+  <!-- RELATION LINES -->
+  <!-- USERS -> PROPOSALS -->
+  <line x1="390" y1="170" x2="500" y2="170" class="line"/>
+  <text x="410" y="160" class="label">authorId</text>
+  <text x="375" y="170" class="card">1</text>
+  <text x="488" y="170" class="card">N</text>
+
+  <!-- CATEGORIES -> PROPOSALS -->
+  <line x1="390" y1="500" x2="500" y2="220" class="line"/>
+  <text x="420" y="365" class="label">categoryId</text>
+  <text x="375" y="500" class="card">1</text>
+  <text x="488" y="220" class="card">N</text>
+
+  <!-- PROPOSALS -> COMMENTS -->
+  <line x1="960" y1="180" x2="1030" y2="180" class="line"/>
+  <text x="970" y="170" class="label">comments</text>
+  <text x="948" y="180" class="card">1</text>
+  <text x="1018" y="180" class="card">N</text>
+
+  <!-- USERS -> COMMENTS -->
+  <line x1="390" y1="240" x2="1030" y2="230" class="line"/>
+  <text x="700" y="225" class="label">authorId</text>
+  <text x="375" y="240" class="card">1</text>
+  <text x="1018" y="230" class="card">N</text>
+
+  <!-- PROPOSALS -> HISTORY -->
+  <line x1="960" y1="320" x2="1030" y2="430" class="line"/>
+  <text x="970" y="365" class="label">history</text>
+  <text x="948" y="320" class="card">1</text>
+  <text x="1018" y="430" class="card">N</text>
+
+  <!-- USERS -> HISTORY -->
+  <line x1="390" y1="280" x2="1030" y2="470" class="line"/>
+  <text x="700" y="400" class="label">changedById</text>
+  <text x="375" y="280" class="card">1</text>
+  <text x="1018" y="470" class="card">N</text>
+
+  <!-- PROPOSALS -> VOTES -->
+  <line x1="960" y1="400" x2="1030" y2="700" class="line"/>
+  <text x="970" y="560" class="label">votes</text>
+  <text x="948" y="400" class="card">1</text>
+  <text x="1018" y="700" class="card">N</text>
+
+  <!-- USERS -> VOTES -->
+  <line x1="390" y1="320" x2="1030" y2="730" class="line"/>
+  <text x="700" y="610" class="label">userId (doc id)</text>
+  <text x="375" y="320" class="card">1</text>
+  <text x="1018" y="730" class="card">N</text>
+
+  <!-- PROPOSALS -> ATTACHMENT -->
+  <line x1="730" y1="440" x2="730" y2="510" class="line"/>
+  <text x="740" y="485" class="label">attachments[]</text>
+  <text x="718" y="440" class="card">1</text>
+  <text x="718" y="505" class="card">N</text>
+</svg>

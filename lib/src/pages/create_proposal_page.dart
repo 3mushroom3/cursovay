@@ -174,7 +174,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
         proposalId = widget.proposalId!;
         final snap = await ProposalsRepository.proposals().doc(proposalId).get();
         final st = snap.data()?['status'] as String?;
-        if (st != ProposalStatus.pending) {
+        if (st != ProposalStatus.pending && st != ProposalStatus.submitted) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -309,9 +309,9 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
             const SizedBox(height: 16),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
-              title: const Text('Видно всем в общей ленте'),
+              title: const Text('Запросить публичный доступ'),
               subtitle: const Text(
-                'Если выключить — увидите только вы (как приватное)',
+                'Фактическая публикация в общую ленту и голосование — после проверки модератором.',
               ),
               value: _visibilityPublic,
               onChanged: _saving
@@ -325,7 +325,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
                   child: OutlinedButton(
                     onPressed: _saving
                         ? null
-                        : () => _save(status: ProposalStatus.pending),
+                        : () => _save(status: ProposalStatus.submitted),
                     child: const Text('Сохранить'),
                   ),
                 ),

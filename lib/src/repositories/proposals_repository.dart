@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import '../attachment_image.dart';
+import '../domain/policies/voting_policy.dart';
 import '../models/proposal_status.dart';
 
 /// Firestore access layer for proposals domain.
@@ -32,8 +33,13 @@ class ProposalsRepository {
       'authorId': authorId,
       'categoryId': categoryId ?? 'uncategorized',
       'visibility': visibility ?? 'private',
-      'status': status ?? ProposalStatus.pending,
+      // Новые обращения по умолчанию ждут модерации для попадания в общую ленту.
+      'status': status ?? ProposalStatus.submitted,
+      // `null` в старых документах трактуем как «уже опубликовано при public».
+      'moderationPublished': false,
       'attachments': [],
+      'votesForCount': 0,
+      'votesAgainstCount': 0,
       'votesCount': 0,
       'createdAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
@@ -104,12 +110,18 @@ class ProposalsRepository {
 
     // 1) Apply status update first (critical action for moderator workflow).
     final pRef = proposals().doc(proposalId);
-    await pRef.update({
+    final patch = <String, dynamic>{
       'status': normalizedStatus,
       'updatedAt': FieldValue.serverTimestamp(),
       // Backward compatible field used by the current detail UI.
       'comment': textReason,
-    });
+    };
+    // Статус «опубликовано» в нашей модели всегда означает доступ в общую ленту.
+    if (normalizedStatus == ProposalStatus.published) {
+      patch['moderationPublished'] = true;
+      patch['visibility'] = 'public';
+    }
+    await pRef.update(patch);
     // Ensure server persisted the new status (helps diagnose silent failures).
     final persisted = await pRef.get();
     final persistedStatus =
@@ -133,45 +145,128 @@ class ProposalsRepository {
     }
   }
 
-  static Future<void> addLike({
+  /// Публикация в общую ленту после решения модератора (ручной шаг).
+  ///
+  /// Автопроверки вызываются отдельно (см. [ClientModerationPipeline]), чтобы
+  /// модератор видел отчёт до необратимого для пользователя изменения статуса.
+  static Future<void> publishToPublicFeed({
     required String proposalId,
-    required String userId,
+    required String moderatorId,
   }) async {
-    await FirebaseFirestore.instance.runTransaction((tx) async {
-      final pRef = proposals().doc(proposalId);
-      final lRef = pRef.collection('votes').doc(userId);
-      final pSnap = await tx.get(pRef);
-      final data = pSnap.data() ?? <String, dynamic>{};
-      final current = (data['votesCount'] as int?) ?? 0;
-      final exists = await tx.get(lRef);
-      if (!exists.exists) {
-        tx.set(lRef, {'votedAt': FieldValue.serverTimestamp()});
-        tx.update(pRef, {
-          'votesCount': current + 1,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
+    await proposals().doc(proposalId).update({
+      'moderationPublished': true,
+      'visibility': 'public',
+      'status': ProposalStatus.published,
+      'moderatedById': moderatorId,
+      'moderatedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
     });
   }
 
-  static Future<void> removeLike({
+  /// Передача в структурное подразделение (фиксируем id из справочника).
+  static Future<void> markTransferredToDepartment({
+    required String proposalId,
+    required String departmentId,
+    required String moderatorId,
+    String? comment,
+  }) async {
+    await proposals().doc(proposalId).update({
+      'status': ProposalStatus.transferred,
+      'handoverDepartmentId': departmentId,
+      'handoverMarkedById': moderatorId,
+      'handoverMarkedAt': FieldValue.serverTimestamp(),
+      if (comment != null && comment.isNotEmpty) 'comment': comment,
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  static Future<void> markArchived({
+    required String proposalId,
+    required String moderatorId,
+  }) async {
+    await proposals().doc(proposalId).update({
+      'status': ProposalStatus.archived,
+      'archivedById': moderatorId,
+      'archivedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// Голос "за" / "против".
+  ///
+  /// Храним значение голоса в `votes/{userId}.value`:
+  /// - `1`  => за
+  /// - `-1` => против
+  static Future<void> setVote({
+    required String proposalId,
+    required String userId,
+    required bool isFor,
+  }) async {
+    await FirebaseFirestore.instance.runTransaction((tx) async {
+      final pRef = proposals().doc(proposalId);
+      final vRef = pRef.collection('votes').doc(userId);
+      final pSnap = await tx.get(pRef);
+      final data = pSnap.data() ?? <String, dynamic>{};
+      VotingPolicy.ensureCanVote(
+        voterId: userId,
+        proposalAuthorId: data['authorId'] as String?,
+      );
+      final prevVoteSnap = await tx.get(vRef);
+      final prevValue = (prevVoteSnap.data()?['value'] as int?) ?? 0;
+      final nextValue = isFor ? 1 : -1;
+      if (prevValue == nextValue) return;
+
+      var forCount = (data['votesForCount'] as int?) ?? 0;
+      var againstCount = (data['votesAgainstCount'] as int?) ?? 0;
+
+      if (prevValue == 1) forCount = forCount > 0 ? forCount - 1 : 0;
+      if (prevValue == -1) againstCount = againstCount > 0 ? againstCount - 1 : 0;
+      if (nextValue == 1) forCount += 1;
+      if (nextValue == -1) againstCount += 1;
+
+      tx.set(vRef, {
+        'value': nextValue,
+        'votedAt': FieldValue.serverTimestamp(),
+      });
+      tx.update(pRef, {
+        'votesForCount': forCount,
+        'votesAgainstCount': againstCount,
+        // Backward compatible aggregate: score = за - против.
+        'votesCount': forCount - againstCount,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    });
+  }
+
+  static Future<void> clearVote({
     required String proposalId,
     required String userId,
   }) async {
     await FirebaseFirestore.instance.runTransaction((tx) async {
       final pRef = proposals().doc(proposalId);
-      final lRef = pRef.collection('votes').doc(userId);
+      final vRef = pRef.collection('votes').doc(userId);
       final pSnap = await tx.get(pRef);
       final data = pSnap.data() ?? <String, dynamic>{};
-      final current = (data['votesCount'] as int?) ?? 0;
-      final lSnap = await tx.get(lRef);
-      if (lSnap.exists) {
-        tx.delete(lRef);
-        tx.update(pRef, {
-          'votesCount': current > 0 ? current - 1 : 0,
-          'updatedAt': FieldValue.serverTimestamp(),
-        });
-      }
+      VotingPolicy.ensureCanVote(
+        voterId: userId,
+        proposalAuthorId: data['authorId'] as String?,
+      );
+      final prevVoteSnap = await tx.get(vRef);
+      if (!prevVoteSnap.exists) return;
+      final prevValue = (prevVoteSnap.data()?['value'] as int?) ?? 0;
+
+      var forCount = (data['votesForCount'] as int?) ?? 0;
+      var againstCount = (data['votesAgainstCount'] as int?) ?? 0;
+      if (prevValue == 1) forCount = forCount > 0 ? forCount - 1 : 0;
+      if (prevValue == -1) againstCount = againstCount > 0 ? againstCount - 1 : 0;
+
+      tx.delete(vRef);
+      tx.update(pRef, {
+        'votesForCount': forCount,
+        'votesAgainstCount': againstCount,
+        'votesCount': forCount - againstCount,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     });
   }
 

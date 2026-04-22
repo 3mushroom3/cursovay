@@ -3,8 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../auth_service.dart';
 import '../attachment_image.dart';
+import '../data/moderation/client_moderation_pipeline.dart';
+import '../data/moderation/firestore_duplicate_heuristic.dart';
+import '../domain/core/failure.dart';
+import '../domain/entities/handover_department.dart';
+import '../domain/moderation/automated_moderation_result.dart';
 import '../models/proposal_status.dart';
-import '../models/user_roles.dart';
 import '../repositories/proposals_repository.dart';
 import 'create_proposal_page.dart';
 
@@ -23,12 +27,15 @@ class _DetailPageState extends State<DetailPage> {
   String? _status;
   String? _lastServerStatus;
 
+  /// Результат последнего запуска автопроверок (показываем модератору до публикации).
+  AutomatedModerationResult? _autoResult;
+  bool _autoBusy = false;
+  String _handoverDepartmentId = HandoverDepartment.defaults.first.id;
+
   @override
   Widget build(BuildContext context) {
     final auth = context.watch<AuthService>();
-    final normalizedRole = UserRoles.normalize(auth.profile?['role']);
-    final canEdit =
-        normalizedRole == UserRoles.teacher || normalizedRole == UserRoles.admin;
+    final canModerate = auth.isModerator || auth.isAdmin;
 
     return Scaffold(
       appBar: AppBar(title: const Text('Детали предложения')),
@@ -70,12 +77,25 @@ class _DetailPageState extends State<DetailPage> {
           final authorId = data['authorId'] as String?;
           final isAuthor = authorId != null && authorId == auth.user?.uid;
           final canAuthorEdit = isAuthor &&
-              (normalizedStatus == ProposalStatus.pending);
+              (normalizedStatus == ProposalStatus.pending ||
+                  normalizedStatus == ProposalStatus.submitted);
           final profileStatus = auth.profile?['status'] as String? ?? '';
           final canComment = auth.user != null &&
               profileStatus != 'unverified' &&
               profileStatus != 'disabled';
-          final canSeeHistory = isAuthor || auth.isAdmin;
+          final canSeeHistory =
+              isAuthor || auth.isAdmin || auth.isModerator;
+          final statusItems = <String>[
+            ProposalStatus.pending,
+            ProposalStatus.submitted,
+            ProposalStatus.inProgress,
+            ProposalStatus.published,
+            ProposalStatus.completed,
+            ProposalStatus.closed,
+            ProposalStatus.archived,
+            ProposalStatus.transferred,
+            ProposalStatus.rejected,
+          ];
 
           return Padding(
             padding: const EdgeInsets.all(24),
@@ -89,9 +109,18 @@ class _DetailPageState extends State<DetailPage> {
                 Text(data['text'] ?? ''),
                 const SizedBox(height: 24),
                 Tooltip(
-                  message: 'pending: на рассмотрении; in_progress: в работе; completed: завершено; rejected: отклонено',
+                  message:
+                      'Полный жизненный цикл см. ProposalStatus; публикация в общую ленту — отдельное действие модератора.',
                   child: Text('Статус: ${ProposalStatus.label(normalizedStatus)}'),
                 ),
+                if (data['moderationPublished'] == false)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'Не опубликовано модератором для общей ленты и голосования.',
+                      style: TextStyle(color: Colors.deepOrange),
+                    ),
+                  ),
                 if (createdAt != null)
                   Text('Создано: ${createdAt.toDate()}'),
                 if (updatedAt != null)
@@ -105,6 +134,156 @@ class _DetailPageState extends State<DetailPage> {
                 _LikesRow(proposalId: widget.id, currentUserId: auth.user!.uid),
                 const SizedBox(height: 16),
                 _AttachmentsBlock(attachments: data['attachments']),
+                if (canModerate) ...[
+                  const SizedBox(height: 24),
+                  Text(
+                    'Модерация',
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Автопроверки — подсказка, не замена решению модератора. '
+                    'Публикация в общую ленту выполняется только вручную.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.tonalIcon(
+                    onPressed: _autoBusy
+                        ? null
+                        : () async {
+                            setState(() => _autoBusy = true);
+                            try {
+                              final pipe = ClientModerationPipeline(
+                                duplicates: FirestoreDuplicateHeuristic(
+                                  FirebaseFirestore.instance,
+                                ),
+                              );
+                              final r = await pipe.runForProposal(
+                                proposalId: widget.id,
+                                data: data,
+                              );
+                              if (mounted) {
+                                setState(() => _autoResult = r);
+                              }
+                            } finally {
+                              if (mounted) setState(() => _autoBusy = false);
+                            }
+                          },
+                    icon: _autoBusy
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.fact_check_outlined),
+                    label: const Text('Запустить автопроверки'),
+                  ),
+                  if (_autoResult != null) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'Лексика: ${_autoResult!.profanityOk ? "ок" : "есть срабатывания ${_autoResult!.profanityHits}"}\n'
+                      'Дубли: score=${_autoResult!.duplicateScore.toStringAsFixed(2)}, '
+                      'похожие id: ${_autoResult!.similarProposalIds.join(", ")}',
+                      style: const TextStyle(fontSize: 12),
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () async {
+                      if (_autoResult != null && !_autoResult!.recommendedToPublish) {
+                        final ok = await showDialog<bool>(
+                          context: context,
+                          builder: (ctx) => AlertDialog(
+                            title: const Text('Публикация'),
+                            content: const Text(
+                              'Автопроверки не зелёные. Всё равно опубликовать?',
+                            ),
+                            actions: [
+                              TextButton(
+                                onPressed: () => Navigator.pop(ctx, false),
+                                child: const Text('Отмена'),
+                              ),
+                              FilledButton(
+                                onPressed: () => Navigator.pop(ctx, true),
+                                child: const Text('Опубликовать'),
+                              ),
+                            ],
+                          ),
+                        );
+                        if (ok != true) return;
+                      }
+                      try {
+                        await ProposalsRepository.publishToPublicFeed(
+                          proposalId: widget.id,
+                          moderatorId: auth.user!.uid,
+                        );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Опубликовано в общую ленту')),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Ошибка: $e')),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.public),
+                    label: const Text('Опубликовать в общую ленту'),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Передать в подразделение',
+                    ),
+                    value: _handoverDepartmentId,
+                    items: HandoverDepartment.defaults
+                        .map(
+                          (d) => DropdownMenuItem(
+                            value: d.id,
+                            child: Text(
+                              d.title,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              softWrap: false,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) => setState(
+                      () => _handoverDepartmentId = v ?? _handoverDepartmentId,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: () async {
+                      try {
+                        await ProposalsRepository.markTransferredToDepartment(
+                          proposalId: widget.id,
+                          departmentId: _handoverDepartmentId,
+                          moderatorId: auth.user!.uid,
+                          comment: _commentController.text.trim(),
+                        );
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(content: Text('Отмечено как переданное')),
+                          );
+                        }
+                      } catch (e) {
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Ошибка: $e')),
+                          );
+                        }
+                      }
+                    },
+                    icon: const Icon(Icons.forward_to_inbox),
+                    label: const Text('Зафиксировать передачу'),
+                  ),
+                ],
                 if (canAuthorEdit) ...[
                   const SizedBox(height: 16),
                   Row(
@@ -164,23 +343,22 @@ class _DetailPageState extends State<DetailPage> {
                     ],
                   ),
                 ],
-                if (canEdit) ...[
+                if (canModerate) ...[
                   const SizedBox(height: 24),
                   DropdownButtonFormField<String>(
-                    value: _status,
+                    value: (_status != null && statusItems.contains(_status))
+                        ? _status
+                        : ProposalStatus.pending,
                     decoration:
                         const InputDecoration(labelText: 'Изменить статус'),
-                    items: const [
-                      DropdownMenuItem(
-                          value: ProposalStatus.pending,
-                          child: Text('На рассмотрении')),
-                      DropdownMenuItem(
-                          value: ProposalStatus.inProgress, child: Text('В работе')),
-                      DropdownMenuItem(
-                          value: ProposalStatus.completed, child: Text('Завершено')),
-                      DropdownMenuItem(
-                          value: ProposalStatus.rejected, child: Text('Отклонено')),
-                    ],
+                    items: statusItems
+                        .map(
+                          (v) => DropdownMenuItem(
+                            value: v,
+                            child: Text(ProposalStatus.label(v)),
+                          ),
+                        )
+                        .toList(),
                     onChanged: (v) => setState(() => _status = v),
                   ),
                   const SizedBox(height: 16),
@@ -465,27 +643,76 @@ class _LikesRow extends StatelessWidget {
       stream: likesCol.snapshots(),
       builder: (context, snapshot) {
         final docs = snapshot.data?.docs ?? const [];
-        final count = docs.length;
-        final liked = docs.any((d) => d.id == currentUserId);
+        final forCount = docs.where((d) => (d.data()['value'] as int? ?? 1) == 1).length;
+        final againstCount = docs.where((d) => (d.data()['value'] as int? ?? 0) == -1).length;
+        final userVote = docs.where((d) => d.id == currentUserId).toList();
+        final voteValue =
+            userVote.isNotEmpty ? (userVote.first.data()['value'] as int? ?? 0) : 0;
         return Row(
           children: [
             IconButton(
               onPressed: () async {
-                if (liked) {
-                  await ProposalsRepository.removeLike(
-                    proposalId: proposalId,
-                    userId: currentUserId,
-                  );
-                } else {
-                  await ProposalsRepository.addLike(
-                    proposalId: proposalId,
-                    userId: currentUserId,
-                  );
+                try {
+                  if (voteValue == 1) {
+                    await ProposalsRepository.clearVote(
+                      proposalId: proposalId,
+                      userId: currentUserId,
+                    );
+                  } else {
+                    await ProposalsRepository.setVote(
+                      proposalId: proposalId,
+                      userId: currentUserId,
+                      isFor: true,
+                    );
+                  }
+                } on Failure catch (f) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(f.message)),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Ошибка: $e')),
+                    );
+                  }
                 }
               },
-              icon: Icon(liked ? Icons.how_to_vote : Icons.how_to_vote_outlined),
+              icon: Icon(voteValue == 1 ? Icons.thumb_up : Icons.thumb_up_outlined),
             ),
-            Text('Голосов: $count'),
+            IconButton(
+              onPressed: () async {
+                try {
+                  if (voteValue == -1) {
+                    await ProposalsRepository.clearVote(
+                      proposalId: proposalId,
+                      userId: currentUserId,
+                    );
+                  } else {
+                    await ProposalsRepository.setVote(
+                      proposalId: proposalId,
+                      userId: currentUserId,
+                      isFor: false,
+                    );
+                  }
+                } on Failure catch (f) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(f.message)),
+                    );
+                  }
+                } catch (e) {
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Ошибка: $e')),
+                    );
+                  }
+                }
+              },
+              icon: Icon(voteValue == -1 ? Icons.thumb_down : Icons.thumb_down_outlined),
+            ),
+            Text('За: $forCount  Против: $againstCount'),
           ],
         );
       },

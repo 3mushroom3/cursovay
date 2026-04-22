@@ -163,7 +163,20 @@ class AuthService extends ChangeNotifier {
   }
 
   bool get isAdmin => UserRoles.normalize(profile?['role']) == UserRoles.admin;
-  bool get isTeacher => UserRoles.normalize(profile?['role']) == UserRoles.teacher;
+
+  bool get isStudent =>
+      UserRoles.normalize(profile?['role']) == UserRoles.student;
+
+  bool get isStaff => UserRoles.normalize(profile?['role']) == UserRoles.staff;
+
+  bool get isModerator =>
+      UserRoles.normalize(profile?['role']) == UserRoles.moderator;
+
+  /// Сотрудник (включая устаревшее значение `teacher` в БД).
+  bool get isTeacher => isStaff;
+
+  /// Кто может создавать предложения по ТЗ: студент и сотрудник.
+  bool get canPostProposals => isStudent || isStaff;
 
   bool get isEmailVerified => _auth.currentUser?.emailVerified ?? false;
 

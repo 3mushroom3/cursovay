@@ -104,8 +104,8 @@ class _SignUpPageState extends State<SignUpPage> {
                   child: Text('Студент'),
                 ),
                 DropdownMenuItem(
-                  value: UserRoles.teacher,
-                  child: Text('Преподаватель'),
+                  value: UserRoles.staff,
+                  child: Text('Сотрудник'),
                 ),
               ],
               onChanged: auth.loading ? null : (v) => setState(() => _role = v!),

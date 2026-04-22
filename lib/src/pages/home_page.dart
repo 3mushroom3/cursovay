@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'feed_page.dart';
 import 'users_page.dart';
+import 'voting_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -14,6 +15,7 @@ class _HomePageState extends State<HomePage> {
 
   final _pages = const [
     FeedPage(),
+    VotingPage(),
     UsersPage(),
   ];
 
@@ -31,6 +33,10 @@ class _HomePageState extends State<HomePage> {
           NavigationDestination(
             icon: Icon(Icons.list),
             label: 'Лента',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.how_to_vote_outlined),
+            label: 'Голосование',
           ),
           NavigationDestination(
             icon: Icon(Icons.person),

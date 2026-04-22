@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:provider/provider.dart';
 import '../auth_service.dart';
+import '../domain/moderation/public_feed_policy.dart';
 import '../models/proposal_status.dart';
 import 'detail_page.dart';
 import 'create_proposal_page.dart';
@@ -11,6 +12,7 @@ import '../attachment_image.dart';
 import '../repositories/categories_repository.dart';
 import '../repositories/proposals_repository.dart';
 import 'categories_admin_page.dart';
+import 'reports_export_page.dart';
 
 class FeedPage extends StatefulWidget {
   const FeedPage({super.key});
@@ -156,7 +158,7 @@ class _FeedPageState extends State<FeedPage> {
       );
     }
 
-    final isTeacherOrAdmin = auth.isAdmin || auth.isTeacher;
+    final canPost = auth.canPostProposals;
     final allStream = FirebaseFirestore.instance
         .collection('proposals')
         .orderBy('createdAt', descending: true)
@@ -167,7 +169,7 @@ class _FeedPageState extends State<FeedPage> {
         title: const Text('Предложения'),
         actions: [
           // У правого края; при overflow узкого AppBar не теряется.
-          if (auth.isAdmin)
+          if (auth.isAdmin || auth.isModerator)
             IconButton(
               tooltip: 'Пользователи и заявки',
               icon: const Icon(Icons.supervisor_account),
@@ -178,7 +180,18 @@ class _FeedPageState extends State<FeedPage> {
                 );
               },
             ),
-          if (auth.isTeacher || auth.isAdmin)
+          if (auth.isAdmin || auth.isModerator)
+            IconButton(
+              tooltip: 'Отчёты PDF / XLSX',
+              icon: const Icon(Icons.description_outlined),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ReportsExportPage()),
+                );
+              },
+            ),
+          if (auth.isAdmin)
             IconButton(
               icon: const Icon(Icons.category_outlined),
               onPressed: () {
@@ -361,7 +374,11 @@ class _FeedPageState extends State<FeedPage> {
                 final allDocs = allSnap.data?.docs ?? const [];
                 final filtered = allDocs.where((d) {
                   final data = d.data() as Map<String, dynamic>;
-                  return _matchesFilters(data);
+                  return _matchesFilters(data) &&
+                      PublicFeedPolicy.isVisibleInFeed(
+                        data: data,
+                        currentUserId: auth.user?.uid,
+                      );
                 }).toList();
                 filtered.sort((a, b) {
                   final ad = a.data() as Map<String, dynamic>;
@@ -392,19 +409,19 @@ class _FeedPageState extends State<FeedPage> {
                 );
               },
             ),
-      floatingActionButton: isTeacherOrAdmin
-          ? null
-          : FloatingActionButton(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(
-              builder: (_) => const CreateProposalPage(),
-            ),
-          );
-        },
-        child: const Icon(Icons.add),
-      ),
+      floatingActionButton: canPost
+          ? FloatingActionButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const CreateProposalPage(),
+                  ),
+                );
+              },
+              child: const Icon(Icons.add),
+            )
+          : null,
     );
   }
 }

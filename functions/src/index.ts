@@ -3,6 +3,42 @@ import { onDocumentUpdated } from 'firebase-functions/v2/firestore';
 
 admin.initializeApp();
 
+function topicForCategory(categoryId: string): string {
+  const safe = categoryId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  return `cat_${safe}`;
+}
+
+/// Публикация модератором (`moderationPublished: true`): рассылаем подписчикам
+/// FCM-топика категории (см. клиент `NotificationService.applyFavoriteCategoryTopics`).
+export const notifyFavoriteCategoryOnProposalPublished = onDocumentUpdated(
+  'proposals/{proposalId}',
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!after) return;
+    const cat = after.categoryId as string | undefined;
+    if (!cat || cat === 'uncategorized') return;
+
+    const was = before?.moderationPublished;
+    const now = after.moderationPublished;
+    if (now !== true || was === true) return;
+
+    const topic = topicForCategory(cat);
+    const title = (after.title as string) || 'Новое предложение';
+    await admin.messaging().send({
+      topic,
+      notification: {
+        title: 'Новое в избранной категории',
+        body: title,
+      },
+      data: {
+        proposalId: event.params.proposalId,
+        categoryId: cat,
+      },
+    });
+  },
+);
+
 export const notifyOnStatusChange = onDocumentUpdated(
   'proposals/{proposalId}',
   async (event) => {

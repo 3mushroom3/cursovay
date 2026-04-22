@@ -16,13 +16,21 @@ class StatisticsPage extends StatelessWidget {
     final normalized = ProposalStatus.normalize(status);
     switch (normalized) {
       case ProposalStatus.pending:
+      case ProposalStatus.submitted:
         return Colors.orange;
       case ProposalStatus.inProgress:
         return Colors.purple;
       case ProposalStatus.completed:
+      case ProposalStatus.closed:
         return Colors.green;
       case ProposalStatus.rejected:
         return Colors.red;
+      case ProposalStatus.published:
+        return Colors.teal;
+      case ProposalStatus.archived:
+        return Colors.blueGrey;
+      case ProposalStatus.transferred:
+        return Colors.indigo;
       default:
         return Colors.grey;
     }
@@ -40,10 +48,7 @@ class StatisticsPage extends StatelessWidget {
           }
 
           final counts = <String, int>{
-            ProposalStatus.pending: 0,
-            ProposalStatus.inProgress: 0,
-            ProposalStatus.completed: 0,
-            ProposalStatus.rejected: 0,
+            for (final s in ProposalStatus.values) s: 0,
           };
 
           final top = <Map<String, dynamic>>[];

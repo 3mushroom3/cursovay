@@ -30,19 +30,7 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
     }
   }
 
-  String roleLabel(String role) {
-    final normalized = UserRoles.normalize(role);
-    switch (normalized) {
-      case UserRoles.student:
-        return 'Студент';
-      case UserRoles.teacher:
-        return 'Преподаватель';
-      case UserRoles.admin:
-        return 'Администратор';
-      default:
-        return 'Неизвестно';
-    }
-  }
+  String roleLabel(String role) => UserRoles.labelRu(role);
 
   static String? _documentUrl(Map<String, dynamic> data) {
     final u = data['documentUrl'] ?? data['photoUrl'];
@@ -248,8 +236,12 @@ class _UsersAdminPageState extends State<UsersAdminPage> {
                           child: Text('Студент'),
                         ),
                         DropdownMenuItem(
-                          value: UserRoles.teacher,
-                          child: Text('Преподаватель'),
+                          value: UserRoles.staff,
+                          child: Text('Сотрудник'),
+                        ),
+                        DropdownMenuItem(
+                          value: UserRoles.moderator,
+                          child: Text('Модератор'),
                         ),
                         DropdownMenuItem(
                           value: UserRoles.admin,

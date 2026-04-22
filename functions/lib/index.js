@@ -33,10 +33,43 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.notifyOnStatusChange = void 0;
+exports.notifyOnStatusChange = exports.notifyFavoriteCategoryOnProposalPublished = void 0;
 const admin = __importStar(require("firebase-admin"));
 const firestore_1 = require("firebase-functions/v2/firestore");
 admin.initializeApp();
+function topicForCategory(categoryId) {
+    const safe = categoryId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `cat_${safe}`;
+}
+/// Публикация модератором (`moderationPublished: true`): рассылаем подписчикам
+/// FCM-топика категории (см. клиент `NotificationService.applyFavoriteCategoryTopics`).
+exports.notifyFavoriteCategoryOnProposalPublished = (0, firestore_1.onDocumentUpdated)('proposals/{proposalId}', async (event) => {
+    var _a, _b;
+    const before = (_a = event.data) === null || _a === void 0 ? void 0 : _a.before.data();
+    const after = (_b = event.data) === null || _b === void 0 ? void 0 : _b.after.data();
+    if (!after)
+        return;
+    const cat = after.categoryId;
+    if (!cat || cat === 'uncategorized')
+        return;
+    const was = before === null || before === void 0 ? void 0 : before.moderationPublished;
+    const now = after.moderationPublished;
+    if (now !== true || was === true)
+        return;
+    const topic = topicForCategory(cat);
+    const title = after.title || 'Новое предложение';
+    await admin.messaging().send({
+        topic,
+        notification: {
+            title: 'Новое в избранной категории',
+            body: title,
+        },
+        data: {
+            proposalId: event.params.proposalId,
+            categoryId: cat,
+        },
+    });
+});
 exports.notifyOnStatusChange = (0, firestore_1.onDocumentUpdated)('proposals/{proposalId}', async (event) => {
     var _a, _b, _c;
     const before = (_a = event.data) === null || _a === void 0 ? void 0 : _a.before.data();
