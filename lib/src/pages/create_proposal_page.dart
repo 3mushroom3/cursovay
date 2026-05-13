@@ -9,11 +9,11 @@ import 'package:provider/provider.dart';
 
 import '../auth_service.dart';
 import '../models/proposal_status.dart';
+import '../models/user_roles.dart';
 import '../repositories/categories_repository.dart';
 import '../repositories/proposals_repository.dart';
 
-/// Create or edit a proposal (edit only allowed for [ProposalStatus.pending]
-/// — enforced in UI when opening from details).
+/// Create or edit a proposal.
 class CreateProposalPage extends StatefulWidget {
   const CreateProposalPage({super.key, this.proposalId});
 
@@ -33,8 +33,6 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
 
   final List<PlatformFile> _picked = [];
   bool _saving = false;
-  /// По умолчанию «всем» — иначе в ленте у других пользователей не появятся новые предложения
-  /// (лента для студентов = только свои + public).
   bool _visibilityPublic = true;
 
   static const _uncategorized = 'uncategorized';
@@ -105,13 +103,9 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
   }
 
   Future<Uint8List> _readFileBytes(PlatformFile f) async {
-    if (f.bytes != null && f.bytes!.isNotEmpty) {
-      return f.bytes!;
-    }
+    if (f.bytes != null && f.bytes!.isNotEmpty) return f.bytes!;
     final p = f.path;
-    if (p == null || p.isEmpty) {
-      throw StateError('Нет данных файла');
-    }
+    if (p == null || p.isEmpty) throw StateError('Нет данных файла');
     return File(p).readAsBytes();
   }
 
@@ -172,14 +166,14 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
         proposalId = ref.id;
       } else {
         proposalId = widget.proposalId!;
-        final snap = await ProposalsRepository.proposals().doc(proposalId).get();
+        final snap =
+            await ProposalsRepository.proposals().doc(proposalId).get();
         final st = snap.data()?['status'] as String?;
         if (st != ProposalStatus.pending && st != ProposalStatus.submitted) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                content: Text('Редактирование недоступно для этого статуса'),
-              ),
+                  content: Text('Редактирование недоступно для этого статуса')),
             );
           }
           return;
@@ -211,9 +205,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              e is FormatException ? e.message : 'Ошибка сохранения',
-            ),
+            content: Text(e is FormatException ? e.message : 'Ошибка сохранения'),
           ),
         );
       }
@@ -225,9 +217,7 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
   @override
   Widget build(BuildContext context) {
     if (_loadingDoc) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
     if (_loadError != null) {
       return Scaffold(
@@ -236,11 +226,16 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
       );
     }
 
+    final auth = context.watch<AuthService>();
+    final role = UserRoles.normalize(auth.profile?['role']);
+    final isStaffOrAbove = role == UserRoles.staff ||
+        role == UserRoles.moderator ||
+        role == UserRoles.admin;
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.proposalId == null
-            ? 'Новое предложение'
-            : 'Редактирование'),
+        title: Text(
+            widget.proposalId == null ? 'Новое предложение' : 'Редактирование'),
       ),
       body: Padding(
         padding: const EdgeInsets.all(24),
@@ -248,12 +243,19 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
           children: [
             TextField(
               controller: _title,
-              decoration: const InputDecoration(labelText: 'Тема'),
+              decoration: const InputDecoration(
+                labelText: 'Тема',
+                hintText: 'Например: Улучшить освещение в корпусе А',
+              ),
             ),
             const SizedBox(height: 16),
             TextField(
               controller: _text,
-              decoration: const InputDecoration(labelText: 'Текст предложения'),
+              decoration: const InputDecoration(
+                labelText: 'Текст предложения',
+                hintText:
+                    'Опишите проблему и предложите решение. Чем подробнее — тем лучше.',
+              ),
               maxLines: 6,
             ),
             const SizedBox(height: 16),
@@ -263,17 +265,36 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
                 if (!snapshot.hasData) {
                   return const LinearProgressIndicator();
                 }
-                final docs = snapshot.data!.docs;
+                final allDocs = snapshot.data!.docs;
+                // Студенты не видят категории только для преподавателей
+                final docs = allDocs.where((d) {
+                  final staffOnly = d.data()['staffOnly'] as bool? ?? false;
+                  return !staffOnly || isStaffOrAbove;
+                }).toList();
+
                 final items = <DropdownMenuItem<String>>[
                   const DropdownMenuItem(
                     value: _uncategorized,
                     child: Text('Без категории'),
                   ),
                   ...docs.map(
-                    (d) => DropdownMenuItem(
-                      value: d.id,
-                      child: Text(d.data()['name'] as String? ?? d.id),
-                    ),
+                    (d) {
+                      final isStaff =
+                          d.data()['staffOnly'] as bool? ?? false;
+                      return DropdownMenuItem(
+                        value: d.id,
+                        child: Row(
+                          children: [
+                            if (isStaff) ...[
+                              const Icon(Icons.school_outlined,
+                                  size: 16, color: Color(0xFF1370B9)),
+                              const SizedBox(width: 6),
+                            ],
+                            Text(d.data()['name'] as String? ?? d.id),
+                          ],
+                        ),
+                      );
+                    },
                   ),
                 ];
                 return DropdownButtonFormField<String>(
@@ -283,9 +304,8 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
                       : _uncategorized,
                   decoration: const InputDecoration(labelText: 'Категория'),
                   items: items,
-                  onChanged: _saving
-                      ? null
-                      : (v) => setState(() => _categoryId = v),
+                  onChanged:
+                      _saving ? null : (v) => setState(() => _categoryId = v),
                 );
               },
             ),
@@ -295,14 +315,14 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
               icon: const Icon(Icons.attach_file),
               label: Text(
                 _picked.isEmpty
-                    ? 'Прикрепить фото (JPG/PNG, до ${_maxAttachmentBytes ~/ 1024} КБ каждое)'
+                    ? 'Прикрепить фото (JPG/PNG, до ${_maxAttachmentBytes ~/ 1024} КБ)'
                     : 'Файлов выбрано: ${_picked.length}',
               ),
             ),
             const Padding(
               padding: EdgeInsets.only(top: 8),
               child: Text(
-                'Вложения хранятся в Firestore; суммарно не больше ~500 КБ изображений на предложение.',
+                'Суммарно не более ~500 КБ изображений на предложение.',
                 style: TextStyle(fontSize: 12, color: Colors.black54),
               ),
             ),
@@ -311,25 +331,16 @@ class _CreateProposalPageState extends State<CreateProposalPage> {
               contentPadding: EdgeInsets.zero,
               title: const Text('Запросить публичный доступ'),
               subtitle: const Text(
-                'Фактическая публикация в общую ленту и голосование — после проверки модератором.',
+                'Публикация в общую ленту и голосование — после проверки модератором.',
               ),
               value: _visibilityPublic,
-              onChanged: _saving
-                  ? null
-                  : (v) => setState(() => _visibilityPublic = v),
+              onChanged: _saving ? null : (v) => setState(() => _visibilityPublic = v),
             ),
             const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: _saving
-                        ? null
-                        : () => _save(status: ProposalStatus.submitted),
-                    child: const Text('Сохранить'),
-                  ),
-                ),
-              ],
+            FilledButton(
+              onPressed:
+                  _saving ? null : () => _save(status: ProposalStatus.submitted),
+              child: const Text('Отправить предложение'),
             ),
             if (_saving)
               const Padding(

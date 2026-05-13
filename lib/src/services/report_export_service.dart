@@ -9,17 +9,6 @@ import 'package:share_plus/share_plus.dart';
 
 import '../models/proposal_status.dart';
 
-/// Формирование отчётов для модераторов / передачи в подразделения.
-///
-/// Почему клиентский экспорт допустим на этапе MVP: данные уже в Firestore,
-/// модератору нужен быстрый файл. В production отчёты обычно генерируют
-/// на сервере (Cloud Functions + Cloud Storage), чтобы:
-/// * не тащить большие выборки на телефон;
-/// * единообразно подписывать документы;
-/// * соблюдать retention и аудит.
-///
-/// Здесь — линейный обход коллекции с фильтрацией в памяти (подходит для
-/// умеренного объёма; при росте — пагинация или серверный отчёт).
 class ReportExportService {
   ReportExportService({FirebaseFirestore? firestore})
       : _db = firestore ?? FirebaseFirestore.instance;
@@ -33,12 +22,23 @@ class ReportExportService {
     String? categoryId,
   }) async {
     final snap = await _db.collection('proposals').orderBy('createdAt').get();
+
+    // Загружаем профили пользователей одним запросом
+    final userSnap = await _db.collection('users').get();
+    final userMap = <String, Map<String, dynamic>>{};
+    for (final u in userSnap.docs) {
+      userMap[u.id] = u.data();
+    }
+
     final rows = <ReportProposalRow>[];
     for (final doc in snap.docs) {
       final m = doc.data();
       final created = (m['createdAt'] as Timestamp?)?.toDate();
       if (from != null && created != null && created.isBefore(from)) continue;
-      if (to != null && created != null && created.isAfter(to)) continue;
+      if (to != null && created != null) {
+        final endOfDay = to.add(const Duration(days: 1));
+        if (created.isAfter(endOfDay)) continue;
+      }
       final cat = m['categoryId'] as String? ?? '';
       if (categoryId != null &&
           categoryId.isNotEmpty &&
@@ -46,38 +46,42 @@ class ReportExportService {
           cat != categoryId) {
         continue;
       }
+
+      final authorId = m['authorId'] as String? ?? '';
+      final authorProfile = userMap[authorId] ?? {};
+      final authorEmail = authorProfile['email'] as String? ?? '';
+      final authorFullName = (authorProfile['fullName'] as String?)?.trim() ?? '';
+      final authorRole = authorProfile['role'] as String? ?? '';
+
       final votesForCount = (m['votesForCount'] as int?) ?? 0;
       final votesAgainstCount = (m['votesAgainstCount'] as int?) ?? 0;
       final legacyVotes = (m['votesCount'] as int?) ?? 0;
-      rows.add(
-        ReportProposalRow(
-          id: doc.id,
-          title: m['title'] as String? ?? '',
-          text: m['text'] as String? ?? '',
-          status: ProposalStatus.normalize(m['status'] as String?),
-          categoryId: cat,
-          authorId: m['authorId'] as String? ?? '',
-          votesCount: legacyVotes,
-          votesForCount: votesForCount == 0 && votesAgainstCount == 0
-              ? legacyVotes
-              : votesForCount,
-          votesAgainstCount: votesAgainstCount,
-          moderationPublished: m['moderationPublished'] as bool?,
-          createdAt: created,
-        ),
-      );
+
+      rows.add(ReportProposalRow(
+        id: doc.id,
+        title: m['title'] as String? ?? '',
+        text: m['text'] as String? ?? '',
+        status: ProposalStatus.normalize(m['status'] as String?),
+        categoryId: cat,
+        authorId: authorId,
+        authorEmail: authorEmail,
+        authorFullName: authorFullName,
+        authorRole: authorRole,
+        votesCount: legacyVotes,
+        votesForCount: votesForCount == 0 && votesAgainstCount == 0
+            ? legacyVotes
+            : votesForCount,
+        votesAgainstCount: votesAgainstCount,
+        moderationPublished: m['moderationPublished'] as bool?,
+        createdAt: created,
+      ));
     }
     return rows;
   }
 
-  /// Имена категорий для подписей в отчёте (один запрос ко всем категориям).
   Future<Map<String, String>> categoryNameMap() async {
     final snap = await _db.collection('categories').get();
-    final map = <String, String>{};
-    for (final d in snap.docs) {
-      map[d.id] = d.data()['name'] as String? ?? d.id;
-    }
-    return map;
+    return {for (final d in snap.docs) d.id: d.data()['name'] as String? ?? d.id};
   }
 
   Future<File> buildPdf({
@@ -86,32 +90,31 @@ class ReportExportService {
     required String title,
   }) async {
     final pdf = pw.Document();
-    final tableData = <List<String>>[
-      [
-        'ID',
-        'Title',
-        'Status',
-        'Category',
-        'Votes For',
-        'Votes Against',
-        'Public',
-        'Created At',
-      ],
+    final headers = [
+      'ФИО автора',
+      'Email автора',
+      'Роль',
+      'Название предложения',
+      'Тема (категория)',
+      'Статус',
+      'За',
+      'Против',
+      'Опубликовано',
+      'Дата',
     ];
+    final tableData = <List<String>>[headers];
     for (final r in rows) {
       tableData.add([
-        r.id,
-        _safeText(r.title),
-        _safeText(ProposalStatus.label(r.status)),
-        _safeText(categoryNames[r.categoryId] ?? r.categoryId),
+        _safe(r.authorFullName.isNotEmpty ? r.authorFullName : r.authorId),
+        _safe(r.authorEmail),
+        _safe(_roleLabel(r.authorRole)),
+        _safe(r.title),
+        _safe(categoryNames[r.categoryId] ?? r.categoryId),
+        _safe(ProposalStatus.label(r.status)),
         '${r.votesForCount}',
         '${r.votesAgainstCount}',
-        r.moderationPublished == true
-            ? 'yes'
-            : r.moderationPublished == false
-                ? 'no'
-                : 'legacy',
-        r.createdAt?.toIso8601String() ?? '',
+        r.moderationPublished == true ? 'да' : 'нет',
+        r.createdAt != null ? _formatDate(r.createdAt!) : '',
       ]);
     }
 
@@ -127,13 +130,26 @@ class ReportExportService {
             headerStyle: pw.TextStyle(fontWeight: pw.FontWeight.bold),
             cellAlignment: pw.Alignment.centerLeft,
             headerDecoration: const pw.BoxDecoration(color: PdfColors.grey300),
+            columnWidths: {
+              0: const pw.FlexColumnWidth(2),
+              1: const pw.FlexColumnWidth(2),
+              2: const pw.FlexColumnWidth(1),
+              3: const pw.FlexColumnWidth(3),
+              4: const pw.FlexColumnWidth(2),
+              5: const pw.FlexColumnWidth(2),
+              6: const pw.FlexColumnWidth(1),
+              7: const pw.FlexColumnWidth(1),
+              8: const pw.FlexColumnWidth(1),
+              9: const pw.FlexColumnWidth(1.5),
+            },
           ),
         ],
       ),
     );
 
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/report_${DateTime.now().millisecondsSinceEpoch}.pdf');
+    final file = File(
+        '${dir.path}/report_${DateTime.now().millisecondsSinceEpoch}.pdf');
     await file.writeAsBytes(await pdf.save());
     return file;
   }
@@ -145,48 +161,44 @@ class ReportExportService {
   }) async {
     final excel = Excel.createExcel();
     excel.delete('Sheet1');
-    final sheet = excel[sheetTitle.length > 31 ? sheetTitle.substring(0, 31) : sheetTitle];
+    final sheet = excel[
+        sheetTitle.length > 31 ? sheetTitle.substring(0, 31) : sheetTitle];
 
     sheet.appendRow([
-      TextCellValue('ID'),
-      TextCellValue('Title'),
-      TextCellValue('Text'),
-      TextCellValue('Status'),
-      TextCellValue('Category'),
-      TextCellValue('Author (uid)'),
-      TextCellValue('Votes For'),
-      TextCellValue('Votes Against'),
-      TextCellValue('Public Moderation'),
-      TextCellValue('Created At'),
+      TextCellValue('ФИО автора'),
+      TextCellValue('Email автора'),
+      TextCellValue('Роль автора'),
+      TextCellValue('Название предложения'),
+      TextCellValue('Тема (категория)'),
+      TextCellValue('Текст'),
+      TextCellValue('Статус'),
+      TextCellValue('Голосов за'),
+      TextCellValue('Голосов против'),
+      TextCellValue('Опубликовано'),
+      TextCellValue('Дата создания'),
     ]);
 
     for (final r in rows) {
       sheet.appendRow([
-        TextCellValue(r.id),
-        TextCellValue(_safeText(r.title)),
-        TextCellValue(_safeText(r.text)),
-        TextCellValue(_safeText(ProposalStatus.label(r.status))),
-        TextCellValue(_safeText(categoryNames[r.categoryId] ?? r.categoryId)),
-        TextCellValue(r.authorId),
+        TextCellValue(r.authorFullName.isNotEmpty ? r.authorFullName : r.authorId),
+        TextCellValue(r.authorEmail),
+        TextCellValue(_roleLabel(r.authorRole)),
+        TextCellValue(_safe(r.title)),
+        TextCellValue(_safe(categoryNames[r.categoryId] ?? r.categoryId)),
+        TextCellValue(_safe(r.text)),
+        TextCellValue(_safe(ProposalStatus.label(r.status))),
         IntCellValue(r.votesForCount),
         IntCellValue(r.votesAgainstCount),
-        TextCellValue(
-          r.moderationPublished == true
-              ? 'yes'
-              : r.moderationPublished == false
-                  ? 'no'
-                  : 'legacy',
-        ),
-        TextCellValue(r.createdAt?.toIso8601String() ?? ''),
+        TextCellValue(r.moderationPublished == true ? 'да' : 'нет'),
+        TextCellValue(r.createdAt != null ? _formatDate(r.createdAt!) : ''),
       ]);
     }
 
     final dir = await getTemporaryDirectory();
-    final file = File('${dir.path}/report_${DateTime.now().millisecondsSinceEpoch}.xlsx');
+    final file = File(
+        '${dir.path}/report_${DateTime.now().millisecondsSinceEpoch}.xlsx');
     final bytes = excel.encode();
-    if (bytes == null) {
-      throw StateError('Не удалось сформировать XLSX');
-    }
+    if (bytes == null) throw StateError('Не удалось сформировать XLSX');
     await file.writeAsBytes(bytes, flush: true);
     return file;
   }
@@ -196,7 +208,6 @@ class ReportExportService {
   }
 }
 
-/// Строка отчёта: плоская проекция документа Firestore.
 class ReportProposalRow {
   const ReportProposalRow({
     required this.id,
@@ -205,6 +216,9 @@ class ReportProposalRow {
     required this.status,
     required this.categoryId,
     required this.authorId,
+    required this.authorEmail,
+    required this.authorFullName,
+    required this.authorRole,
     required this.votesCount,
     required this.votesForCount,
     required this.votesAgainstCount,
@@ -218,6 +232,9 @@ class ReportProposalRow {
   final String status;
   final String categoryId;
   final String authorId;
+  final String authorEmail;
+  final String authorFullName;
+  final String authorRole;
   final int votesCount;
   final int votesForCount;
   final int votesAgainstCount;
@@ -225,7 +242,7 @@ class ReportProposalRow {
   final DateTime? createdAt;
 }
 
-String _safeText(String input) {
+String _safe(String input) {
   if (input.isEmpty) return input;
   const map = <String, String>{
     'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
@@ -240,14 +257,30 @@ String _safeText(String input) {
     final lower = ch.toLowerCase();
     if (map.containsKey(lower)) {
       final t = map[lower]!;
-      if (ch == lower) {
-        b.write(t);
-      } else {
-        b.write(t.isEmpty ? '' : '${t[0].toUpperCase()}${t.substring(1)}');
-      }
+      b.write(ch == lower ? t : (t.isEmpty ? '' : '${t[0].toUpperCase()}${t.substring(1)}'));
     } else {
       b.write(ch);
     }
   }
   return b.toString();
+}
+
+String _roleLabel(String role) {
+  switch (role) {
+    case 'student':
+      return 'Студент';
+    case 'staff':
+      return 'Преподаватель';
+    case 'moderator':
+      return 'Модератор';
+    case 'admin':
+      return 'Администратор';
+    default:
+      return role;
+  }
+}
+
+String _formatDate(DateTime d) {
+  final local = d.toLocal();
+  return '${local.day.toString().padLeft(2, '0')}.${local.month.toString().padLeft(2, '0')}.${local.year}';
 }

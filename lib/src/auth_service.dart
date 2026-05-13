@@ -19,6 +19,8 @@ class AuthService extends ChangeNotifier {
   bool _profileLoaded = false;
   bool get profileLoaded => _profileLoaded;
 
+  bool _profileLoading = false;
+
   User? get user => _auth.currentUser;
 
   Map<String, dynamic>? profile;
@@ -31,13 +33,21 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> loadProfile() async {
+    if (_profileLoading) return;
     final uid = _auth.currentUser?.uid;
     if (uid == null) return;
 
-    final snap = await _db.collection('users').doc(uid).get();
-    profile = snap.data();
-    _profileLoaded = true;
-    notifyListeners();
+    _profileLoading = true;
+    try {
+      final snap = await _db.collection('users').doc(uid).get();
+      profile = snap.data();
+    } catch (_) {
+      profile = null;
+    } finally {
+      _profileLoading = false;
+      _profileLoaded = true;
+      notifyListeners();
+    }
   }
 
   Future<void> signIn(String email, String password) async {
@@ -159,6 +169,7 @@ class AuthService extends ChangeNotifier {
     await _auth.signOut();
     profile = null;
     _profileLoaded = false;
+    _profileLoading = false;
     notifyListeners();
   }
 

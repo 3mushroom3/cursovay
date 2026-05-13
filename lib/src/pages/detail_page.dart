@@ -10,11 +10,11 @@ import '../domain/entities/handover_department.dart';
 import '../domain/moderation/automated_moderation_result.dart';
 import '../models/proposal_status.dart';
 import '../repositories/proposals_repository.dart';
+import '../utils/date_format.dart';
 import 'create_proposal_page.dart';
 
 class DetailPage extends StatefulWidget {
   final String id;
-
   const DetailPage({super.key, required this.id});
 
   @override
@@ -26,11 +26,11 @@ class _DetailPageState extends State<DetailPage> {
   final _newCommentController = TextEditingController();
   String? _status;
   String? _lastServerStatus;
-
-  /// Результат последнего запуска автопроверок (показываем модератору до публикации).
   AutomatedModerationResult? _autoResult;
   bool _autoBusy = false;
   String _handoverDepartmentId = HandoverDepartment.defaults.first.id;
+  DateTime? _votingDeadline;
+  bool _savingDeadline = false;
 
   @override
   Widget build(BuildContext context) {
@@ -48,30 +48,30 @@ class _DetailPageState extends State<DetailPage> {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(child: CircularProgressIndicator());
           }
-
           if (!snapshot.hasData || !snapshot.data!.exists) {
             return const Center(child: Text('Предложение не найдено'));
           }
 
           final data = snapshot.data!.data() as Map<String, dynamic>;
-
           final status = data['status'] as String?;
           final comment = data['comment'] as String?;
-          final createdAt = data['createdAt'] as Timestamp?;
-          final updatedAt = data['updatedAt'] as Timestamp?;
+          final createdAt = (data['createdAt'] as Timestamp?)?.toDate();
+          final updatedAt = (data['updatedAt'] as Timestamp?)?.toDate();
+          final storedDeadline =
+              (data['votingDeadline'] as Timestamp?)?.toDate();
 
           final normalizedStatus = ProposalStatus.normalize(status);
           if (_lastServerStatus != normalizedStatus) {
-            final hasUnsavedLocalStatusChange =
+            final hasUnsaved =
                 _status != null && _status != _lastServerStatus;
             _lastServerStatus = normalizedStatus;
-            // Do not overwrite user-selected value before explicit save.
-            if (!hasUnsavedLocalStatusChange) {
-              _status = normalizedStatus;
-            }
+            if (!hasUnsaved) _status = normalizedStatus;
           }
           if (_commentController.text.isEmpty && comment != null) {
             _commentController.text = comment;
+          }
+          if (_votingDeadline == null && storedDeadline != null) {
+            _votingDeadline = storedDeadline;
           }
 
           final authorId = data['authorId'] as String?;
@@ -79,12 +79,13 @@ class _DetailPageState extends State<DetailPage> {
           final canAuthorEdit = isAuthor &&
               (normalizedStatus == ProposalStatus.pending ||
                   normalizedStatus == ProposalStatus.submitted);
-          final profileStatus = auth.profile?['status'] as String? ?? '';
+          final profileStatus =
+              auth.profile?['status'] as String? ?? '';
           final canComment = auth.user != null &&
               profileStatus != 'unverified' &&
               profileStatus != 'disabled';
-          final canSeeHistory =
-              isAuthor || auth.isAdmin || auth.isModerator;
+          final canSeeHistory = isAuthor || auth.isAdmin || auth.isModerator;
+
           final statusItems = <String>[
             ProposalStatus.pending,
             ProposalStatus.submitted,
@@ -107,44 +108,79 @@ class _DetailPageState extends State<DetailPage> {
                 ),
                 const SizedBox(height: 12),
                 Text(data['text'] ?? ''),
-                const SizedBox(height: 24),
-                Tooltip(
-                  message:
-                      'Полный жизненный цикл см. ProposalStatus; публикация в общую ленту — отдельное действие модератора.',
-                  child: Text('Статус: ${ProposalStatus.label(normalizedStatus)}'),
-                ),
+                const SizedBox(height: 20),
+                // Статус с цветной плашкой
+                _StatusBadge(status: normalizedStatus),
                 if (data['moderationPublished'] == false)
                   const Padding(
                     padding: EdgeInsets.only(top: 8),
                     child: Text(
-                      'Не опубликовано модератором для общей ленты и голосования.',
-                      style: TextStyle(color: Colors.deepOrange),
+                      'Не опубликовано для общей ленты и голосования.',
+                      style: TextStyle(color: Colors.deepOrange, fontSize: 13),
                     ),
                   ),
+                const SizedBox(height: 12),
+                // Дата без системной информации (только дд.мм.гггг чч:мм)
                 if (createdAt != null)
-                  Text('Создано: ${createdAt.toDate()}'),
+                  _InfoRow(
+                    icon: Icons.calendar_today_outlined,
+                    label: 'Создано',
+                    value: formatDateTime(createdAt),
+                  ),
                 if (updatedAt != null)
-                  Text('Обновлено: ${updatedAt.toDate()}'),
+                  _InfoRow(
+                    icon: Icons.update_outlined,
+                    label: 'Обновлено',
+                    value: formatDateTime(updatedAt),
+                  ),
+                if (storedDeadline != null)
+                  _InfoRow(
+                    icon: Icons.timer_outlined,
+                    label: 'Голосование до',
+                    value: formatDateTime(storedDeadline),
+                  ),
                 if (comment != null && comment.isNotEmpty)
                   Padding(
                     padding: const EdgeInsets.only(top: 12),
-                    child: Text('Комментарий: $comment'),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.shade50,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.blue.shade100),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(Icons.comment_outlined,
+                              size: 18, color: Colors.blue),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              comment,
+                              style: const TextStyle(fontSize: 14),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 const SizedBox(height: 16),
-                _LikesRow(proposalId: widget.id, currentUserId: auth.user!.uid),
+                _LikesRow(
+                    proposalId: widget.id,
+                    currentUserId: auth.user!.uid),
                 const SizedBox(height: 16),
                 _AttachmentsBlock(attachments: data['attachments']),
+
+                // ── Модерация ──
                 if (canModerate) ...[
                   const SizedBox(height: 24),
-                  Text(
-                    'Модерация',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
+                  Text('Модерация',
+                      style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 8),
                   Text(
-                    'Автопроверки — подсказка, не замена решению модератора. '
-                    'Публикация в общую ленту выполняется только вручную.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
+                    'Автопроверки — подсказка, не замена решению модератора.',
+                    style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
                   ),
                   const SizedBox(height: 12),
                   FilledButton.tonalIcon(
@@ -155,16 +191,13 @@ class _DetailPageState extends State<DetailPage> {
                             try {
                               final pipe = ClientModerationPipeline(
                                 duplicates: FirestoreDuplicateHeuristic(
-                                  FirebaseFirestore.instance,
-                                ),
+                                    FirebaseFirestore.instance),
                               );
                               final r = await pipe.runForProposal(
                                 proposalId: widget.id,
                                 data: data,
                               );
-                              if (mounted) {
-                                setState(() => _autoResult = r);
-                              }
+                              if (mounted) setState(() => _autoResult = r);
                             } finally {
                               if (mounted) setState(() => _autoBusy = false);
                             }
@@ -173,40 +206,37 @@ class _DetailPageState extends State<DetailPage> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                            child: CircularProgressIndicator(strokeWidth: 2))
                         : const Icon(Icons.fact_check_outlined),
-                    label: const Text('Запустить автопроверки'),
+                    label: const Text('Автопроверки'),
                   ),
                   if (_autoResult != null) ...[
-                    const SizedBox(height: 12),
+                    const SizedBox(height: 8),
                     Text(
-                      'Лексика: ${_autoResult!.profanityOk ? "ок" : "есть срабатывания ${_autoResult!.profanityHits}"}\n'
+                      'Лексика: ${_autoResult!.profanityOk ? "ок" : "срабатывания: ${_autoResult!.profanityHits}"}\n'
                       'Дубли: score=${_autoResult!.duplicateScore.toStringAsFixed(2)}, '
-                      'похожие id: ${_autoResult!.similarProposalIds.join(", ")}',
+                      'id: ${_autoResult!.similarProposalIds.join(", ")}',
                       style: const TextStyle(fontSize: 12),
                     ),
                   ],
                   const SizedBox(height: 12),
                   FilledButton.icon(
                     onPressed: () async {
-                      if (_autoResult != null && !_autoResult!.recommendedToPublish) {
+                      if (_autoResult != null &&
+                          !_autoResult!.recommendedToPublish) {
                         final ok = await showDialog<bool>(
                           context: context,
                           builder: (ctx) => AlertDialog(
                             title: const Text('Публикация'),
                             content: const Text(
-                              'Автопроверки не зелёные. Всё равно опубликовать?',
-                            ),
+                                'Автопроверки не зелёные. Всё равно опубликовать?'),
                             actions: [
                               TextButton(
-                                onPressed: () => Navigator.pop(ctx, false),
-                                child: const Text('Отмена'),
-                              ),
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Отмена')),
                               FilledButton(
-                                onPressed: () => Navigator.pop(ctx, true),
-                                child: const Text('Опубликовать'),
-                              ),
+                                  onPressed: () => Navigator.pop(ctx, true),
+                                  child: const Text('Опубликовать')),
                             ],
                           ),
                         );
@@ -219,14 +249,13 @@ class _DetailPageState extends State<DetailPage> {
                         );
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Опубликовано в общую ленту')),
-                          );
+                              const SnackBar(
+                                  content: Text('Опубликовано в общую ленту')));
                         }
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Ошибка: $e')),
-                          );
+                              SnackBar(content: Text('Ошибка: $e')));
                         }
                       }
                     },
@@ -234,28 +263,113 @@ class _DetailPageState extends State<DetailPage> {
                     label: const Text('Опубликовать в общую ленту'),
                   ),
                   const SizedBox(height: 16),
+
+                  // Срок голосования
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.timer_outlined, size: 18),
+                          label: Text(_votingDeadline == null
+                              ? 'Установить срок голосования'
+                              : 'Срок: ${formatDateTime(_votingDeadline!)}'),
+                          onPressed: () async {
+                            final date = await showDatePicker(
+                              context: context,
+                              initialDate: _votingDeadline ?? DateTime.now(),
+                              firstDate: DateTime.now(),
+                              lastDate:
+                                  DateTime.now().add(const Duration(days: 365)),
+                            );
+                            if (date == null || !mounted) return;
+                            final time = await showTimePicker(
+                              context: context,
+                              initialTime: TimeOfDay.fromDateTime(
+                                  _votingDeadline ?? DateTime.now()),
+                            );
+                            if (!mounted) return;
+                            setState(() {
+                              _votingDeadline = DateTime(
+                                date.year,
+                                date.month,
+                                date.day,
+                                time?.hour ?? 23,
+                                time?.minute ?? 59,
+                              );
+                            });
+                          },
+                        ),
+                      ),
+                      if (_votingDeadline != null) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: 'Сохранить срок',
+                          icon: _savingDeadline
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2))
+                              : const Icon(Icons.save_outlined),
+                          onPressed: _savingDeadline
+                              ? null
+                              : () async {
+                                  setState(() => _savingDeadline = true);
+                                  try {
+                                    await ProposalsRepository.proposals()
+                                        .doc(widget.id)
+                                        .update({
+                                      'votingDeadline': Timestamp.fromDate(
+                                          _votingDeadline!),
+                                      'updatedAt':
+                                          FieldValue.serverTimestamp(),
+                                    });
+                                    if (mounted) {
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(const SnackBar(
+                                              content:
+                                                  Text('Срок сохранён')));
+                                    }
+                                  } finally {
+                                    if (mounted) {
+                                      setState(() => _savingDeadline = false);
+                                    }
+                                  }
+                                },
+                        ),
+                        IconButton(
+                          tooltip: 'Убрать срок',
+                          icon: const Icon(Icons.timer_off_outlined),
+                          onPressed: () async {
+                            await ProposalsRepository.proposals()
+                                .doc(widget.id)
+                                .update({
+                              'votingDeadline': FieldValue.delete(),
+                              'updatedAt': FieldValue.serverTimestamp(),
+                            });
+                            if (mounted) setState(() => _votingDeadline = null);
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
                   DropdownButtonFormField<String>(
                     isExpanded: true,
                     decoration: const InputDecoration(
-                      labelText: 'Передать в подразделение',
-                    ),
+                        labelText: 'Передать в подразделение'),
                     value: _handoverDepartmentId,
                     items: HandoverDepartment.defaults
-                        .map(
-                          (d) => DropdownMenuItem(
-                            value: d.id,
-                            child: Text(
-                              d.title,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              softWrap: false,
-                            ),
-                          ),
-                        )
+                        .map((d) => DropdownMenuItem(
+                              value: d.id,
+                              child: Text(d.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            ))
                         .toList(),
                     onChanged: (v) => setState(
-                      () => _handoverDepartmentId = v ?? _handoverDepartmentId,
-                    ),
+                        () => _handoverDepartmentId = v ?? _handoverDepartmentId),
                   ),
                   const SizedBox(height: 8),
                   OutlinedButton.icon(
@@ -269,14 +383,13 @@ class _DetailPageState extends State<DetailPage> {
                         );
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Отмечено как переданное')),
-                          );
+                              const SnackBar(
+                                  content: Text('Отмечено как переданное')));
                         }
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Ошибка: $e')),
-                          );
+                              SnackBar(content: Text('Ошибка: $e')));
                         }
                       }
                     },
@@ -284,21 +397,21 @@ class _DetailPageState extends State<DetailPage> {
                     label: const Text('Зафиксировать передачу'),
                   ),
                 ],
+
+                // ── Редактирование автора ──
                 if (canAuthorEdit) ...[
                   const SizedBox(height: 16),
                   Row(
                     children: [
                       Expanded(
                         child: OutlinedButton.icon(
-                          onPressed: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) =>
-                                    CreateProposalPage(proposalId: widget.id),
-                              ),
-                            );
-                          },
+                          onPressed: () => Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  CreateProposalPage(proposalId: widget.id),
+                            ),
+                          ),
                           icon: const Icon(Icons.edit),
                           label: const Text('Редактировать'),
                         ),
@@ -315,20 +428,17 @@ class _DetailPageState extends State<DetailPage> {
                               context: context,
                               builder: (ctx) => AlertDialog(
                                 title: const Text('Удалить предложение?'),
-                                content: const Text(
-                                  'Действие нельзя отменить.',
-                                ),
+                                content:
+                                    const Text('Действие нельзя отменить.'),
                                 actions: [
                                   TextButton(
-                                    onPressed: () =>
-                                        Navigator.pop(ctx, false),
-                                    child: const Text('Отмена'),
-                                  ),
+                                      onPressed: () =>
+                                          Navigator.pop(ctx, false),
+                                      child: const Text('Отмена')),
                                   FilledButton(
-                                    onPressed: () =>
-                                        Navigator.pop(ctx, true),
-                                    child: const Text('Удалить'),
-                                  ),
+                                      onPressed: () =>
+                                          Navigator.pop(ctx, true),
+                                      child: const Text('Удалить')),
                                 ],
                               ),
                             );
@@ -343,6 +453,8 @@ class _DetailPageState extends State<DetailPage> {
                     ],
                   ),
                 ],
+
+                // ── Изменение статуса (модератор) ──
                 if (canModerate) ...[
                   const SizedBox(height: 24),
                   DropdownButtonFormField<String>(
@@ -352,12 +464,10 @@ class _DetailPageState extends State<DetailPage> {
                     decoration:
                         const InputDecoration(labelText: 'Изменить статус'),
                     items: statusItems
-                        .map(
-                          (v) => DropdownMenuItem(
-                            value: v,
-                            child: Text(ProposalStatus.label(v)),
-                          ),
-                        )
+                        .map((v) => DropdownMenuItem(
+                              value: v,
+                              child: Text(ProposalStatus.label(v)),
+                            ))
                         .toList(),
                     onChanged: (v) => setState(() => _status = v),
                   ),
@@ -365,18 +475,19 @@ class _DetailPageState extends State<DetailPage> {
                   TextField(
                     controller: _commentController,
                     maxLines: 3,
-                    decoration:
-                        const InputDecoration(labelText: 'Комментарий'),
+                    decoration: const InputDecoration(
+                        labelText: 'Комментарий модератора'),
                   ),
                   const SizedBox(height: 24),
                   FilledButton(
                     onPressed: () async {
                       final nextStatus = _status ?? ProposalStatus.pending;
                       final reason = _commentController.text.trim();
-                      if (nextStatus == ProposalStatus.rejected && reason.isEmpty) {
+                      if (nextStatus == ProposalStatus.rejected &&
+                          reason.isEmpty) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Укажите причину отклонения')),
-                        );
+                            const SnackBar(
+                                content: Text('Укажите причину отклонения')));
                         return;
                       }
                       try {
@@ -387,77 +498,68 @@ class _DetailPageState extends State<DetailPage> {
                           reason: reason,
                           moderatorCommentForLegacyUi: reason,
                         );
-
                         if (!mounted) return;
                         setState(() {
                           _status = nextStatus;
                           _lastServerStatus = nextStatus;
                         });
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Изменения сохранены'),
-                          ),
-                        );
+                            const SnackBar(
+                                content: Text('Изменения сохранены')));
                       } catch (e) {
                         if (!mounted) return;
                         final msg = e is FirebaseException
-                            ? 'Не удалось сохранить: ${e.code} ${e.message ?? ''}'
-                            : 'Не удалось сохранить: $e';
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(msg),
-                          ),
-                        );
+                            ? 'Ошибка: ${e.code} ${e.message ?? ''}'
+                            : 'Ошибка: $e';
+                        ScaffoldMessenger.of(context)
+                            .showSnackBar(SnackBar(content: Text(msg)));
                       }
                     },
-                    child: const Text('Сохранить'),
+                    child: const Text('Сохранить статус'),
                   ),
                 ],
+
+                // ── История статусов ──
                 if (canSeeHistory) ...[
+                  const SizedBox(height: 24),
+                  Text('История статусов',
+                      style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: ProposalsRepository.proposalHistory(widget.id)
+                        .orderBy('changedAt', descending: true)
+                        .snapshots(),
+                    builder: (context, s) {
+                      if (!s.hasData) return const LinearProgressIndicator();
+                      final docs = s.data!.docs;
+                      if (docs.isEmpty) return const Text('Пока пусто');
+                      return Column(
+                        children: docs.map((d) {
+                          final m = d.data();
+                          final st = ProposalStatus.label(
+                              m['status'] as String? ?? '');
+                          final r = (m['reason'] as String?)?.trim();
+                          final at =
+                              (m['changedAt'] as Timestamp?)?.toDate();
+                          return ListTile(
+                            dense: true,
+                            contentPadding: EdgeInsets.zero,
+                            title: Text(st),
+                            subtitle: Text([
+                              if (at != null) formatDate(at),
+                              if (r != null && r.isNotEmpty) r,
+                            ].join(' — ')),
+                          );
+                        }).toList(),
+                      );
+                    },
+                  ),
+                ],
+
+                // ── Комментарии ──
                 const SizedBox(height: 24),
-                Text(
-                  'История статусов',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                const SizedBox(height: 8),
-                StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                  stream: ProposalsRepository.proposalHistory(widget.id)
-                      .orderBy('changedAt', descending: true)
-                      .snapshots(),
-                  builder: (context, s) {
-                    if (!s.hasData) {
-                      return const LinearProgressIndicator();
-                    }
-                    final docs = s.data!.docs;
-                    if (docs.isEmpty) {
-                      return const Text('Пока пусто');
-                    }
-                    return Column(
-                      children: docs.map((d) {
-                        final m = d.data();
-                        final st = ProposalStatus.label(m['status'] as String? ?? '');
-                        final r = (m['reason'] as String?)?.trim();
-                        final at = (m['changedAt'] as Timestamp?)?.toDate();
-                        final by = (m['changedById'] as String?) ?? '';
-                        return ListTile(
-                          dense: true,
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(st),
-                          subtitle: Text([
-                            if (at != null) _relativeTime(at),
-                            if (by.isNotEmpty) 'изменил: $by',
-                            if (r != null && r.isNotEmpty) r,
-                          ].join(' — ')),
-                        );
-                      }).toList(),
-                    );
-                  },
-                ),],
-                const SizedBox(height: 24),
-                Text(
-                  'Комментарии',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
+                Text('Комментарии',
+                    style: Theme.of(context).textTheme.titleMedium),
                 const SizedBox(height: 8),
                 StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance
@@ -475,7 +577,8 @@ class _DetailPageState extends State<DetailPage> {
                         final m = d.data();
                         final text = m['text'] as String? ?? '';
                         final at = (m['createdAt'] as Timestamp?)?.toDate();
-                        final who = (m['authorDisplayName'] as String?)?.trim();
+                        final who =
+                            (m['authorDisplayName'] as String?)?.trim();
                         final aid = m['authorId'] as String? ?? '';
                         final whoLine = (who != null && who.isNotEmpty)
                             ? who
@@ -485,13 +588,9 @@ class _DetailPageState extends State<DetailPage> {
                         return ListTile(
                           dense: true,
                           contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            whoLine,
-                            style: const TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14,
-                            ),
-                          ),
+                          title: Text(whoLine,
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.w600, fontSize: 14)),
                           subtitle: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
@@ -501,11 +600,10 @@ class _DetailPageState extends State<DetailPage> {
                                 Padding(
                                   padding: const EdgeInsets.only(top: 4),
                                   child: Text(
-                                    _relativeTime(at),
+                                    formatDate(at),
                                     style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.grey.shade700,
-                                    ),
+                                        fontSize: 12,
+                                        color: Colors.grey.shade700),
                                   ),
                                 ),
                             ],
@@ -523,6 +621,7 @@ class _DetailPageState extends State<DetailPage> {
                     maxLines: 4,
                     decoration: const InputDecoration(
                       labelText: 'Добавить комментарий',
+                      hintText: 'Поделитесь мнением...',
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -533,10 +632,8 @@ class _DetailPageState extends State<DetailPage> {
                         final txt = _newCommentController.text.trim();
                         if (txt.isEmpty) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Введите текст комментария'),
-                            ),
-                          );
+                              const SnackBar(
+                                  content: Text('Введите текст комментария')));
                           return;
                         }
                         final profile = auth.profile;
@@ -557,8 +654,9 @@ class _DetailPageState extends State<DetailPage> {
                         } catch (e) {
                           if (!context.mounted) return;
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Не удалось отправить: $e')),
-                          );
+                              SnackBar(
+                                  content:
+                                      Text('Не удалось отправить: $e')));
                         }
                       },
                       child: const Text('Отправить'),
@@ -574,9 +672,75 @@ class _DetailPageState extends State<DetailPage> {
   }
 }
 
+// ── Вспомогательные виджеты ──
+
+class _StatusBadge extends StatelessWidget {
+  const _StatusBadge({required this.status});
+  final String status;
+
+  Color get _color {
+    switch (status) {
+      case ProposalStatus.inProgress:
+        return Colors.purple;
+      case ProposalStatus.published:
+        return Colors.teal;
+      case ProposalStatus.completed:
+      case ProposalStatus.closed:
+        return Colors.green;
+      case ProposalStatus.rejected:
+        return Colors.red;
+      case ProposalStatus.archived:
+        return Colors.blueGrey;
+      default:
+        return Colors.orange;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+      decoration: BoxDecoration(
+        color: _color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _color.withOpacity(0.4)),
+      ),
+      child: Text(
+        ProposalStatus.label(status),
+        style: TextStyle(
+            color: _color, fontWeight: FontWeight.w600, fontSize: 13),
+      ),
+    );
+  }
+}
+
+class _InfoRow extends StatelessWidget {
+  const _InfoRow(
+      {required this.icon, required this.label, required this.value});
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 16, color: Colors.grey.shade600),
+          const SizedBox(width: 8),
+          Text('$label: ',
+              style: const TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(value, style: const TextStyle(fontSize: 13)),
+        ],
+      ),
+    );
+  }
+}
+
 class _AttachmentsBlock extends StatelessWidget {
   const _AttachmentsBlock({required this.attachments});
-
   final Object? attachments;
 
   @override
@@ -602,7 +766,8 @@ class _AttachmentsBlock extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(name, style: Theme.of(context).textTheme.bodyMedium),
+                  Text(name,
+                      style: Theme.of(context).textTheme.bodyMedium),
                   const SizedBox(height: 6),
                   img,
                 ],
@@ -614,12 +779,10 @@ class _AttachmentsBlock extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
             leading: const Icon(Icons.insert_drive_file_outlined),
             title: Text(name),
-            subtitle: Text(
-              [
-                if (ct.isNotEmpty) ct,
-                if (url.isNotEmpty) url,
-              ].join(' • '),
-            ),
+            subtitle: Text([
+              if (ct.isNotEmpty) ct,
+              if (url.isNotEmpty) url,
+            ].join(' • ')),
           );
         }),
       ],
@@ -628,8 +791,8 @@ class _AttachmentsBlock extends StatelessWidget {
 }
 
 class _LikesRow extends StatelessWidget {
-  const _LikesRow({required this.proposalId, required this.currentUserId});
-
+  const _LikesRow(
+      {required this.proposalId, required this.currentUserId});
   final String proposalId;
   final String currentUserId;
 
@@ -643,11 +806,15 @@ class _LikesRow extends StatelessWidget {
       stream: likesCol.snapshots(),
       builder: (context, snapshot) {
         final docs = snapshot.data?.docs ?? const [];
-        final forCount = docs.where((d) => (d.data()['value'] as int? ?? 1) == 1).length;
-        final againstCount = docs.where((d) => (d.data()['value'] as int? ?? 0) == -1).length;
-        final userVote = docs.where((d) => d.id == currentUserId).toList();
-        final voteValue =
-            userVote.isNotEmpty ? (userVote.first.data()['value'] as int? ?? 0) : 0;
+        final forCount =
+            docs.where((d) => (d.data()['value'] as int? ?? 1) == 1).length;
+        final againstCount =
+            docs.where((d) => (d.data()['value'] as int? ?? 0) == -1).length;
+        final userVote =
+            docs.where((d) => d.id == currentUserId).toList();
+        final voteValue = userVote.isNotEmpty
+            ? (userVote.first.data()['value'] as int? ?? 0)
+            : 0;
         return Row(
           children: [
             IconButton(
@@ -655,75 +822,63 @@ class _LikesRow extends StatelessWidget {
                 try {
                   if (voteValue == 1) {
                     await ProposalsRepository.clearVote(
-                      proposalId: proposalId,
-                      userId: currentUserId,
-                    );
+                        proposalId: proposalId, userId: currentUserId);
                   } else {
                     await ProposalsRepository.setVote(
-                      proposalId: proposalId,
-                      userId: currentUserId,
-                      isFor: true,
-                    );
+                        proposalId: proposalId,
+                        userId: currentUserId,
+                        isFor: true);
                   }
                 } on Failure catch (f) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(f.message)),
-                    );
+                        SnackBar(content: Text(f.message)));
                   }
                 } catch (e) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Ошибка: $e')),
-                    );
+                        SnackBar(content: Text('Ошибка: $e')));
                   }
                 }
               },
-              icon: Icon(voteValue == 1 ? Icons.thumb_up : Icons.thumb_up_outlined),
+              icon: Icon(
+                  voteValue == 1 ? Icons.thumb_up : Icons.thumb_up_outlined),
             ),
+            Text('$forCount', style: const TextStyle(fontWeight: FontWeight.w600)),
+            const SizedBox(width: 16),
             IconButton(
               onPressed: () async {
                 try {
                   if (voteValue == -1) {
                     await ProposalsRepository.clearVote(
-                      proposalId: proposalId,
-                      userId: currentUserId,
-                    );
+                        proposalId: proposalId, userId: currentUserId);
                   } else {
                     await ProposalsRepository.setVote(
-                      proposalId: proposalId,
-                      userId: currentUserId,
-                      isFor: false,
-                    );
+                        proposalId: proposalId,
+                        userId: currentUserId,
+                        isFor: false);
                   }
                 } on Failure catch (f) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(f.message)),
-                    );
+                        SnackBar(content: Text(f.message)));
                   }
                 } catch (e) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Ошибка: $e')),
-                    );
+                        SnackBar(content: Text('Ошибка: $e')));
                   }
                 }
               },
-              icon: Icon(voteValue == -1 ? Icons.thumb_down : Icons.thumb_down_outlined),
+              icon: Icon(voteValue == -1
+                  ? Icons.thumb_down
+                  : Icons.thumb_down_outlined),
             ),
-            Text('За: $forCount  Против: $againstCount'),
+            Text('$againstCount',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
           ],
         );
       },
     );
   }
-}
-
-String _relativeTime(DateTime dateTime) {
-  final diff = DateTime.now().difference(dateTime);
-  if (diff.inMinutes < 1) return 'только что';
-  if (diff.inHours < 1) return '${diff.inMinutes} мин назад';
-  if (diff.inDays < 1) return '${diff.inHours} ч назад';
-  return '${diff.inDays} дн назад';
 }

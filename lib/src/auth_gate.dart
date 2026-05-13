@@ -39,7 +39,7 @@ class _AuthGateState extends State<AuthGate> {
           return const AuthPage();
         }
 
-        if (auth.profile == null) {
+        if (auth.profile == null && !auth.profileLoaded) {
           auth.loadProfile();
         }
 

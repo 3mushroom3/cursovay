@@ -228,13 +228,23 @@ class ProposalsRepository {
         'value': nextValue,
         'votedAt': FieldValue.serverTimestamp(),
       });
-      tx.update(pRef, {
+      final patch = <String, dynamic>{
         'votesForCount': forCount,
         'votesAgainstCount': againstCount,
         // Backward compatible aggregate: score = за - против.
         'votesCount': forCount - againstCount,
         'updatedAt': FieldValue.serverTimestamp(),
-      });
+      };
+      // Автопродвижение: при наборе 10+ голосов «за» предложение переходит в работу
+      const autoPromoteThreshold = 10;
+      final currentStatus =
+          ProposalStatus.normalize(data['status'] as String?);
+      if (forCount >= autoPromoteThreshold &&
+          currentStatus == ProposalStatus.published) {
+        patch['status'] = ProposalStatus.inProgress;
+        patch['autoPromotedAt'] = FieldValue.serverTimestamp();
+      }
+      tx.update(pRef, patch);
     });
   }
 

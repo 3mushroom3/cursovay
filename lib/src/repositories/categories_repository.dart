@@ -5,9 +5,13 @@ class CategoriesRepository {
     return FirebaseFirestore.instance.collection('categories');
   }
 
-  static Future<String> createCategory({required String name}) async {
+  static Future<String> createCategory({
+    required String name,
+    bool staffOnly = false,
+  }) async {
     final doc = await categories().add({
       'name': name.trim(),
+      'staffOnly': staffOnly,
       'createdAt': FieldValue.serverTimestamp(),
     });
     return doc.id;
@@ -16,11 +20,14 @@ class CategoriesRepository {
   static Future<void> updateCategory({
     required String id,
     required String name,
+    bool? staffOnly,
   }) async {
-    await categories().doc(id).update({
+    final patch = <String, dynamic>{
       'name': name.trim(),
       'updatedAt': FieldValue.serverTimestamp(),
-    });
+    };
+    if (staffOnly != null) patch['staffOnly'] = staffOnly;
+    await categories().doc(id).update(patch);
   }
 
   static Future<void> deleteCategory(String id) async {
