@@ -14,11 +14,13 @@ class PublicFeedPolicy {
     return mp == true;
   }
 
-  /// Автор всегда видит свои материалы в личной логике фильтрации.
+  /// Автор всегда видит свои материалы; модератор/администратор — все.
   static bool isVisibleInFeed({
     required Map<String, dynamic> data,
     required String? currentUserId,
+    bool isModerator = false,
   }) {
+    if (isModerator) return true;
     final authorId = data['authorId'] as String?;
     if (currentUserId != null && authorId == currentUserId) return true;
     return isVisibleToOthers(data);

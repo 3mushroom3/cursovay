@@ -10,7 +10,10 @@ service cloud.firestore {
     function isOwner(userId) { return signedIn() && userId == uid(); }
 
     match /users/{userId} {
-      allow read: if signedIn() && (isOwner(userId) || isModerator());
+      // get() на единственный документ — проверяем владельца или модератора
+      allow get: if signedIn() && (isOwner(userId) || isModerator());
+      // list (выборка коллекции) — только модераторы и администраторы
+      allow list: if signedIn() && isModerator();
       allow create: if signedIn() && isOwner(userId);
       allow update: if signedIn() && (isOwner(userId) || isModerator());
       allow delete: if false;
@@ -22,34 +25,27 @@ service cloud.firestore {
     }
 
     match /proposals/{proposalId} {
-      function proposalData() {
-        return get(/databases/$(database)/documents/proposals/$(proposalId)).data;
-      }
-      function canSeeProposalContent() {
-        return signedIn() && (
-          proposalData().visibility == 'public' ||
-          proposalData().authorId == uid() ||
-          isModerator()
-        );
-      }
-
       function isPublic() { return resource.data.visibility == 'public'; }
       function isAuthor() { return isOwner(resource.data.authorId); }
 
-      allow read: if signedIn() && (isPublic() || isAuthor() || isModerator());
+      // list (выборка коллекции): любой аутентифицированный пользователь.
+      // Видимость применяется на клиенте через PublicFeedPolicy.isVisibleInFeed().
+      allow list: if signedIn();
+      // get (одиночный документ): публичное, своё или модератор
+      allow get: if signedIn() && (isPublic() || isAuthor() || isModerator());
       allow create: if signedIn();
       allow update: if signedIn() && (isModerator() || isAuthor());
       allow delete: if signedIn() && (isModerator() || isAuthor());
 
       match /history/{eventId} {
-        allow read: if canSeeProposalContent();
+        allow read: if signedIn();
         allow create: if signedIn() && isModerator();
         allow update, delete: if false;
       }
 
       match /comments/{commentId} {
-        allow read: if canSeeProposalContent();
-        allow create: if canSeeProposalContent() &&
+        allow read: if signedIn();
+        allow create: if signedIn() &&
           request.resource.data.authorId == uid() &&
           request.resource.data.text is string &&
           request.resource.data.text.size() > 0 &&
@@ -57,11 +53,12 @@ service cloud.firestore {
           request.resource.data.authorDisplayName is string &&
           request.resource.data.authorDisplayName.size() > 0 &&
           request.resource.data.authorDisplayName.size() <= 200;
-        allow update, delete: if signedIn() && (isModerator() || resource.data.authorId == uid());
+        allow update, delete: if signedIn() &&
+          (isModerator() || resource.data.authorId == uid());
       }
 
       match /votes/{voteUserId} {
-        allow read: if canSeeProposalContent();
+        allow read: if signedIn();
         allow create, delete: if signedIn() && voteUserId == uid();
       }
     }

@@ -551,6 +551,7 @@ class _FeedPageState extends State<FeedPage> {
                   PublicFeedPolicy.isVisibleInFeed(
                     data: data,
                     currentUserId: auth.user?.uid,
+                    isModerator: auth.isModerator || auth.isAdmin,
                   );
             }).toList();
             filtered.sort((a, b) {
